@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { ArrowRight, Receipt, CalendarClock, ShoppingCart, Plus } from 'lucide-react'
 import { getCategoryLabel } from '@/lib/categories'
 
 // ── helpers ────────────────────────────────────────────────
@@ -10,13 +11,10 @@ function monthRange(date = new Date()) {
   const last  = new Date(y, m + 1, 0).toISOString().split('T')[0]
   return { first, last }
 }
-function addDays(d: Date, n: number) {
-  const r = new Date(d); r.setDate(r.getDate() + n); return r
-}
-function fmtDate(s: string) {
-  return new Date(s + 'T12:00:00').toLocaleDateString('default', { weekday: 'short', month: 'short', day: 'numeric' })
-}
 function currency(n: number) { return `$${Math.abs(n).toFixed(2)}` }
+function fmtShort(s: string) {
+  return new Date(s + 'T12:00:00').toLocaleDateString('es', { day: 'numeric', month: 'short' })
+}
 
 // ── page ───────────────────────────────────────────────────
 export default async function DashboardPage() {
@@ -24,296 +22,235 @@ export default async function DashboardPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  // Profile + family check
   const { data: profile } = await supabase
-    .from('profiles')
-    .select('display_name, family_id')
-    .eq('user_id', user.id)
-    .single()
-
+    .from('profiles').select('display_name, family_id').eq('user_id', user.id).single()
   if (!profile?.family_id) redirect('/family')
 
   const familyId = profile.family_id
   const { first, last } = monthRange()
   const today = new Date()
-  const todayStr = today.toISOString().split('T')[0]
-  const nextWeekStr = addDays(today, 7).toISOString().split('T')[0]
 
-  // Parallel queries
   const [
     { data: members },
     { data: expenses },
     { data: settlements },
-    { data: budgets },
-    { data: events },
     { data: fixedExpenses },
     { data: fixedPayments },
-    { data: shoppingItems },
+    { data: shopItems },
   ] = await Promise.all([
     supabase.from('profiles').select('user_id, display_name').eq('family_id', familyId),
-    supabase.from('expenses').select('amount, paid_by, category').eq('family_id', familyId).gte('date', first).lte('date', last),
-    supabase.from('settlements').select('from_user, to_user, amount').eq('family_id', familyId).gte('date', first).lte('date', last),
-    supabase.from('budgets').select('category, amount').eq('family_id', familyId).eq('month', first),
-    supabase.from('events').select('id, title, date').eq('family_id', familyId).gte('date', todayStr).lte('date', nextWeekStr).order('date'),
-    supabase.from('fixed_expenses').select('id, name, category, amount, due_day, default_paid_by').eq('family_id', familyId).eq('is_active', true).order('due_day'),
-    supabase.from('fixed_expense_payments').select('fixed_expense_id').eq('family_id', familyId).eq('month', first),
-    supabase.from('shopping_items').select('id, name').eq('family_id', familyId).eq('bought', false).order('created_at', { ascending: false }).limit(4),
+    supabase.from('expenses')
+      .select('id, title, amount, date, category, paid_by')
+      .eq('family_id', familyId).gte('date', first).lte('date', last)
+      .order('date', { ascending: false }).order('created_at', { ascending: false }),
+    supabase.from('settlements').select('from_user, to_user, amount')
+      .eq('family_id', familyId).gte('date', first).lte('date', last),
+    supabase.from('fixed_expenses').select('id, name, amount, due_day')
+      .eq('family_id', familyId).eq('is_active', true),
+    supabase.from('fixed_expense_payments').select('fixed_expense_id')
+      .eq('family_id', familyId).eq('month', first),
+    supabase.from('shopping_items').select('id')
+      .eq('family_id', familyId).eq('bought', false),
   ])
 
-  const memberList = members ?? []
-  const expenseList = expenses ?? []
-  const settlementList = settlements ?? []
-  const budgetList = budgets ?? []
-  const eventList = events ?? []
-  const fixedList = fixedExpenses ?? []
+  const memberList   = members ?? []
+  const expenseList  = expenses ?? []
+  const settlList    = settlements ?? []
+  const fixedList    = fixedExpenses ?? []
   const paidFixedIds = new Set((fixedPayments ?? []).map(p => p.fixed_expense_id))
-  const shopList = shoppingItems ?? []
+  const shopCount    = (shopItems ?? []).length
 
-  // ── Balance calculation ────────────────────────────────
-  const totalSpent = expenseList.reduce((s, e) => s + Number(e.amount), 0)
+  // ── Balance (unchanged logic) ──────────────────────────
+  const totalSpent  = expenseList.reduce((s, e) => s + Number(e.amount), 0)
   const memberCount = memberList.length || 1
-  const equalShare = totalSpent / memberCount
+  const equalShare  = totalSpent / memberCount
 
   const paidMap: Record<string, number> = {}
   for (const e of expenseList) {
     paidMap[e.paid_by] = (paidMap[e.paid_by] ?? 0) + Number(e.amount)
   }
-  // balance > 0 means overpaid (owed), < 0 means underpaid (owes)
   const balance: Record<string, number> = {}
   for (const m of memberList) {
     balance[m.user_id] = (paidMap[m.user_id] ?? 0) - equalShare
   }
-  // Apply settlements
-  for (const s of settlementList) {
+  for (const s of settlList) {
     balance[s.from_user] = (balance[s.from_user] ?? 0) + Number(s.amount)
     balance[s.to_user]   = (balance[s.to_user]   ?? 0) - Number(s.amount)
   }
 
   const memberName = (uid: string) =>
-    memberList.find(m => m.user_id === uid)?.display_name || 'Member'
+    memberList.find(m => m.user_id === uid)?.display_name || 'Miembro'
 
-  // Who owes whom (simplified for 2-person family)
   const sorted = memberList
     .map(m => ({ ...m, bal: balance[m.user_id] ?? 0 }))
     .sort((a, b) => a.bal - b.bal)
 
-  let owesText = '✅ Even!'
-  if (sorted.length >= 2) {
-    const debtor   = sorted[0]  // most negative
-    const creditor = sorted[sorted.length - 1]
-    const diff = Math.abs(debtor.bal)
-    if (diff >= 0.01) {
-      owesText = `${memberName(debtor.user_id)} owes ${memberName(creditor.user_id)} ${currency(diff)}`
-    }
-  }
+  const debtor   = sorted[0]
+  const creditor = sorted[sorted.length - 1]
+  const diff     = sorted.length >= 2 ? Math.abs(debtor?.bal ?? 0) : 0
+  const isEven   = diff < 0.01
 
-  // ── Top 3 categories ──────────────────────────────────
-  const catMap: Record<string, number> = {}
-  for (const e of expenseList) {
-    catMap[e.category] = (catMap[e.category] ?? 0) + Number(e.amount)
-  }
-  const topCats = Object.entries(catMap)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-
-  // ── Budget usage ──────────────────────────────────────
-  const budgetUsage = budgetList.map(b => {
-    const spent = catMap[b.category] ?? 0
-    const pct = b.amount > 0 ? (spent / Number(b.amount)) * 100 : 0
-    return { category: b.category, budget: Number(b.amount), spent, pct }
-  }).sort((a, b) => b.pct - a.pct).slice(0, 4)
-
-  // ── Fixed expenses status ─────────────────────────────
   const unpaidFixed = fixedList.filter(f => !paidFixedIds.has(f.id))
-  const paidFixed   = fixedList.filter(f => paidFixedIds.has(f.id))
-
-  const monthLabel = today.toLocaleString('default', { month: 'long', year: 'numeric' })
-  const firstName  = profile.display_name?.split(' ')[0] ?? user.email?.split('@')[0] ?? 'there'
+  const recentExp   = expenseList.slice(0, 3)
+  const firstName   = profile.display_name?.split(' ')[0] ?? user.email?.split('@')[0] ?? 'ahí'
+  const monthLabel  = today.toLocaleString('es', { month: 'long', year: 'numeric' })
 
   return (
-    <div className="px-4 pt-5 pb-6 space-y-4 max-w-lg mx-auto">
-      {/* Greeting */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Hi, {firstName} 👋</h1>
-        <p className="text-sm text-gray-400 mt-0.5">{monthLabel}</p>
+    <div className="px-4 pt-5 pb-6 space-y-3 max-w-lg mx-auto">
+
+      {/* ── Saludo ────────────────────────────────────── */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Hola, {firstName} 👋</h1>
+          <p className="text-sm text-gray-400 mt-0.5 capitalize">{monthLabel}</p>
+        </div>
+        <Link href="/expenses"
+          className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center shadow-md active:opacity-80">
+          <Plus size={20} className="text-white" strokeWidth={2.5} />
+        </Link>
       </div>
 
-      {/* ── Card: Who owes whom ─────────────────────────── */}
-      <section className="bg-blue-600 rounded-2xl p-5 text-white shadow-md">
-        <p className="text-xs font-semibold uppercase tracking-wider opacity-75 mb-1">Balance del Mes</p>
-        <p className="text-xl font-bold">{owesText}</p>
-        <div className="mt-3 pt-3 border-t border-blue-500 flex gap-4">
-          {memberList.map(m => (
-            <div key={m.user_id} className="flex-1">
-              <p className="text-xs opacity-70">{memberName(m.user_id)}</p>
-              <p className="font-bold text-lg">{currency(paidMap[m.user_id] ?? 0)}</p>
-              <p className="text-[11px] opacity-60">
-                {(balance[m.user_id] ?? 0) >= 0
-                  ? `+${currency(balance[m.user_id] ?? 0)} owed`
-                  : `${currency(balance[m.user_id] ?? 0)} owes`}
-              </p>
-            </div>
-          ))}
-        </div>
-        <Link href="/expenses" className="mt-3 flex items-center gap-1 text-xs opacity-70">
-          Total gastado: <span className="font-bold">${totalSpent.toFixed(2)}</span>
-          <span className="ml-1">→</span>
-        </Link>
-      </section>
+      {/* ── A) Balance Card ───────────────────────────── */}
+      <section className="bg-gradient-to-br from-blue-600 to-blue-700 rounded-2xl p-5 text-white shadow-md">
+        <p className="text-[11px] font-bold uppercase tracking-widest opacity-60 mb-2">Balance del mes</p>
 
-      {/* ── Card: Top categories ────────────────────────── */}
-      {topCats.length > 0 && (
-        <section className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-bold text-gray-800">Top categorías</p>
-            <Link href="/expenses" className="text-xs text-blue-500">Ver todo →</Link>
+        {isEven ? (
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-2xl font-black">¡Todo cuadrado!</span>
+            <span className="text-xl">✅</span>
           </div>
-          <div className="space-y-2">
-            {topCats.map(([cat, amt]) => (
-              <div key={cat} className="flex items-center justify-between">
-                <span className="text-sm text-gray-700">{getCategoryLabel(cat)}</span>
-                <span className="text-sm font-semibold text-gray-900">${amt.toFixed(2)}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* ── Card: Budget overview ───────────────────────── */}
-      <section className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-sm font-bold text-gray-800">Presupuestos</p>
-          <Link href="/budgets" className="text-xs text-blue-500">Gestionar →</Link>
-        </div>
-        {budgetUsage.length === 0 ? (
-          <p className="text-xs text-gray-400 text-center py-2">
-            Sin presupuestos. <Link href="/budgets" className="text-blue-500 underline">Agrega uno →</Link>
-          </p>
         ) : (
-          <div className="space-y-3">
-            {budgetUsage.map(b => {
-              const color = b.pct > 100 ? 'bg-red-500' : b.pct > 80 ? 'bg-yellow-400' : 'bg-green-500'
-              const textColor = b.pct > 100 ? 'text-red-600' : b.pct > 80 ? 'text-yellow-600' : 'text-green-600'
+          <>
+            <p className="text-sm opacity-75 mb-0.5">
+              {memberName(debtor?.user_id)} le debe a {memberName(creditor?.user_id)}
+            </p>
+            <p className="text-4xl font-black tracking-tight leading-none mb-1">{currency(diff)}</p>
+          </>
+        )}
+
+        {/* Por miembro */}
+        {memberList.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-blue-500/40 flex gap-4">
+            {memberList.map(m => {
+              const paid = paidMap[m.user_id] ?? 0
+              const pct  = totalSpent > 0 ? Math.round((paid / totalSpent) * 100) : 0
               return (
-                <div key={b.category}>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-gray-700 font-medium">{getCategoryLabel(b.category)}</span>
-                    <span className={`font-semibold ${textColor}`}>
-                      {b.pct > 100
-                        ? `Over by $${(b.spent - b.budget).toFixed(2)}`
-                        : `${b.pct.toFixed(0)}%`}
-                    </span>
+                <div key={m.user_id} className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <div className="w-5 h-5 rounded-full bg-white/25 flex items-center justify-center text-[10px] font-bold flex-shrink-0">
+                      {(m.display_name ?? '?')[0].toUpperCase()}
+                    </div>
+                    <span className="text-[11px] opacity-70 truncate">{m.display_name ?? 'Miembro'}</span>
                   </div>
-                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${color}`}
-                      style={{ width: `${Math.min(b.pct, 100)}%` }}
-                    />
-                  </div>
-                  <p className="text-[10px] text-gray-400 mt-0.5">
-                    ${b.spent.toFixed(2)} / ${b.budget.toFixed(2)}
-                  </p>
+                  <p className="text-xl font-black leading-none">{currency(paid)}</p>
+                  <p className="text-[10px] opacity-50 mt-0.5">{pct}% del total</p>
                 </div>
               )
             })}
           </div>
         )}
-      </section>
 
-      {/* ── Card: Fixed expenses ────────────────────────── */}
-      <section className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-sm font-bold text-gray-800">Gastos Fijos</p>
-          <Link href="/fixed" className="text-xs text-blue-500">Ver todo →</Link>
-        </div>
-        {fixedList.length === 0 ? (
-          <p className="text-xs text-gray-400 text-center py-2">
-            <Link href="/fixed" className="text-blue-500 underline">Agrega tus fijos →</Link>
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {unpaidFixed.slice(0, 3).map(f => (
-              <div key={f.id} className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-orange-400 flex-shrink-0" />
-                <span className="text-sm text-gray-700 flex-1">{f.name}</span>
-                <span className="text-xs text-gray-400">día {f.due_day}</span>
-                <span className="text-sm font-semibold text-gray-900">${Number(f.amount).toFixed(2)}</span>
-              </div>
-            ))}
-            {paidFixed.slice(0, 2).map(f => (
-              <div key={f.id} className="flex items-center gap-2 opacity-50">
-                <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
-                <span className="text-sm text-gray-500 line-through flex-1">{f.name}</span>
-                <span className="text-[11px] text-green-600 font-medium">Pagado</span>
-              </div>
-            ))}
-            {unpaidFixed.length === 0 && paidFixed.length > 0 && (
-              <p className="text-xs text-green-600 font-medium text-center">✅ Todos los fijos pagados</p>
-            )}
-          </div>
-        )}
-      </section>
-
-      {/* ── Card: Upcoming events ───────────────────────── */}
-      <section className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-sm font-bold text-gray-800">Próximos eventos</p>
-          <Link href="/events" className="text-xs text-blue-500">Ver todo →</Link>
-        </div>
-        {eventList.length === 0 ? (
-          <p className="text-xs text-gray-400 text-center py-2">
-            Sin eventos esta semana. <Link href="/events" className="text-blue-500 underline">Agrega →</Link>
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {eventList.slice(0, 4).map(e => (
-              <div key={e.id} className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
-                  <span className="text-lg">📅</span>
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">{e.title}</p>
-                  <p className="text-xs text-gray-400">{fmtDate(e.date)}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* ── Card: Shopping list ─────────────────────────── */}
-      <section className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-sm font-bold text-gray-800">Lista de Mercado</p>
-          <Link href="/shopping" className="text-xs text-blue-500">Ver todo →</Link>
-        </div>
-        {shopList.length === 0 ? (
-          <p className="text-xs text-gray-400 text-center py-2">
-            Lista vacía. <Link href="/shopping" className="text-blue-500 underline">Agrega →</Link>
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {shopList.map(item => (
-              <div key={item.id} className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0" />
-                <span className="text-sm text-gray-700">{item.name}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* ── Quick actions ───────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3 pt-1">
-        <Link href="/expenses" className="bg-blue-600 text-white rounded-2xl p-4 flex items-center gap-3 shadow-sm active:opacity-90">
-          <span className="text-2xl">💸</span>
-          <span className="font-semibold text-sm">Nuevo gasto</span>
+        <Link href="/expenses"
+          className="mt-3 flex items-center gap-1 text-[11px] opacity-50 hover:opacity-80">
+          Total gastado: <span className="font-bold ml-0.5">${totalSpent.toFixed(2)}</span>
+          <ArrowRight size={11} className="ml-0.5" />
         </Link>
-        <Link href="/history" className="bg-white text-gray-800 rounded-2xl p-4 flex items-center gap-3 shadow-sm border border-gray-100 active:opacity-90">
-          <span className="text-2xl">📊</span>
-          <span className="font-semibold text-sm">Historial</span>
-        </Link>
+      </section>
+
+      {/* ── B) Mini stats ─────────────────────────────── */}
+      <div className="grid grid-cols-3 gap-2">
+        {[
+          { label: 'Gastado',  value: `$${totalSpent < 1000 ? totalSpent.toFixed(0) : (totalSpent/1000).toFixed(1)+'k'}`, sub: 'este mes', Icon: Receipt, href: '/expenses' },
+          { label: 'Fijos',    value: String(unpaidFixed.length), sub: 'por pagar',    Icon: CalendarClock, href: '/fixed'    },
+          { label: 'Lista',    value: String(shopCount),          sub: 'pendientes',   Icon: ShoppingCart,  href: '/shopping' },
+        ].map(({ label, value, sub, Icon, href }) => (
+          <Link key={label} href={href}
+            className="bg-white rounded-2xl p-3 border border-gray-100 shadow-sm flex flex-col items-center text-center active:opacity-80">
+            <Icon size={15} className="text-blue-500 mb-1.5" strokeWidth={1.8} />
+            <p className="text-[18px] font-black text-gray-900 leading-none">{value}</p>
+            <p className="text-[9px] text-gray-400 mt-1 font-semibold leading-tight uppercase tracking-wide">{label}</p>
+            <p className="text-[9px] text-gray-300 leading-tight">{sub}</p>
+          </Link>
+        ))}
       </div>
+
+      {/* ── C) Actividad reciente ─────────────────────── */}
+      <section className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-4 pt-4 pb-2">
+          <p className="text-sm font-bold text-gray-900">Actividad reciente</p>
+          <Link href="/expenses"
+            className="flex items-center gap-0.5 text-xs text-blue-500 font-semibold">
+            Ver todos <ArrowRight size={12} />
+          </Link>
+        </div>
+
+        {recentExp.length === 0 ? (
+          <div className="px-4 py-6 text-center">
+            <p className="text-gray-400 text-sm mb-2">Sin gastos este mes.</p>
+            <Link href="/expenses"
+              className="inline-flex items-center gap-1 text-blue-500 text-sm font-semibold">
+              <Plus size={14} /> Agrega el primero
+            </Link>
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-50">
+            {recentExp.map(e => (
+              <div key={e.id} className="flex items-center gap-3 px-4 py-3">
+                <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                  <Receipt size={15} className="text-blue-500" strokeWidth={1.8} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate leading-tight">{e.title}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {fmtShort(e.date)} · {getCategoryLabel(e.category)} · {memberName(e.paid_by)}
+                  </p>
+                </div>
+                <p className="text-sm font-bold text-gray-900 flex-shrink-0">
+                  ${Number(e.amount).toFixed(2)}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ── D) Gasto por persona ─────────────────────── */}
+      {memberList.length >= 2 && totalSpent > 0 && (
+        <section className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+          <p className="text-sm font-bold text-gray-900 mb-3">Gasto por persona</p>
+          <div className="space-y-3">
+            {memberList.map(m => {
+              const paid = paidMap[m.user_id] ?? 0
+              const pct  = totalSpent > 0 ? (paid / totalSpent) * 100 : 0
+              const isMe = m.user_id === user.id
+              return (
+                <div key={m.user_id} className="flex items-center gap-3">
+                  <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 ${
+                    isMe ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
+                  }`}>
+                    {(m.display_name ?? '?')[0].toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between text-xs mb-1.5">
+                      <span className="font-semibold text-gray-800 flex items-center gap-1">
+                        {m.display_name ?? 'Miembro'}
+                        {isMe && <span className="text-[10px] text-gray-400 font-normal">(yo)</span>}
+                      </span>
+                      <span className="font-bold text-gray-900">${paid.toFixed(2)}</span>
+                    </div>
+                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${isMe ? 'bg-blue-500' : 'bg-gray-400'}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
     </div>
   )
 }

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import CategorySelect from '@/components/CategorySelect'
 import { DEFAULT_CATEGORY, FIXED_PRESETS } from '@/lib/categories'
+import { CalendarClock, Plus, X, Check, Pencil, Trash2 } from 'lucide-react'
 
 type FixedExpense = {
   id: string; name: string; amount: number; category: string
@@ -42,7 +43,7 @@ export default function FixedPage() {
   const [markingId, setMarkingId] = useState<string | null>(null)
 
   const memberName = (uid: string | null) =>
-    members.find(m => m.user_id === uid)?.display_name || 'Member'
+    members.find(m => m.user_id === uid)?.display_name || 'Miembro'
 
   const loadData = useCallback(async (fid: string) => {
     const month = monthFirst()
@@ -109,12 +110,10 @@ export default function FixedPage() {
     setMarkingId(f.id)
     const today = todayStr()
     const month = monthFirst()
-    // 1) Create a real expense
     const { data: exp, error: expErr } = await supabase.from('expenses')
       .insert({ family_id: familyId, title: f.name, amount: f.amount, date: today, category: f.category, paid_by: f.default_paid_by ?? userId })
       .select().single()
     if (expErr || !exp) { setMarkingId(null); return }
-    // 2) Record the payment
     await supabase.from('fixed_expense_payments')
       .insert({ fixed_expense_id: f.id, family_id: familyId, month, expense_id: exp.id, created_by: userId })
     setPaidIds(prev => new Set([...prev, f.id]))
@@ -141,11 +140,16 @@ export default function FixedPage() {
 
   return (
     <div className="max-w-lg mx-auto">
+      {/* Header */}
       <div className="px-4 pt-5 pb-3 flex items-center justify-between">
-        <h1 className="text-xl font-bold text-gray-900">Gastos Fijos</h1>
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Gastos Fijos</h1>
+          <p className="text-xs text-gray-400 mt-0.5">{unpaid.length} pendientes · {paid.length} pagados</p>
+        </div>
         <button onClick={() => setShowPresets(true)}
-          className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-xl active:opacity-80">
-          + Agregar
+          className="flex items-center gap-1.5 bg-blue-600 text-white text-sm font-semibold px-4 py-2.5 rounded-2xl active:opacity-80">
+          <Plus size={15} strokeWidth={2.5} />
+          Agregar
         </button>
       </div>
 
@@ -179,30 +183,33 @@ export default function FixedPage() {
           <div className="bg-white w-full rounded-t-3xl p-5 space-y-3 max-h-[90vh] overflow-y-auto"
             onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-1" />
-            <h2 className="text-lg font-bold">{editId ? 'Editar fijo' : 'Nuevo fijo'}</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold">{editId ? 'Editar fijo' : 'Nuevo fijo'}</h2>
+              <button onClick={() => setShowForm(false)} className="text-gray-400 p-1">
+                <X size={20} />
+              </button>
+            </div>
             <form onSubmit={handleSave} className="space-y-3">
               {formError && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-xl">{formError}</p>}
               <input type="text" required placeholder="Nombre (ej. Netflix)" value={name}
                 onChange={e => setName(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-gray-200 bg-gray-50 focus:bg-white transition-colors rounded-xl px-3 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
               <div className="flex gap-2">
                 <input type="number" required step="0.01" min="0" placeholder="Monto $"
                   value={amount} onChange={e => setAmount(e.target.value)}
-                  className="flex-1 border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 border border-gray-200 bg-gray-50 focus:bg-white transition-colors rounded-xl px-3 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
-                <div className="flex-1">
-                  <input type="number" required min="1" max="31" placeholder="Día vence"
-                    value={dueDay} onChange={e => setDueDay(e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
+                <input type="number" required min="1" max="31" placeholder="Día vence"
+                  value={dueDay} onChange={e => setDueDay(e.target.value)}
+                  className="flex-1 border border-gray-200 bg-gray-50 focus:bg-white transition-colors rounded-xl px-3 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
               </div>
               <CategorySelect value={category} onChange={setCategory} required />
               <div>
-                <label className="text-xs font-medium text-gray-500 mb-1 block">Quién paga</label>
+                <label className="text-xs font-medium text-gray-500 mb-1.5 block">Quién paga</label>
                 <select value={defaultPaidBy} onChange={e => setDefaultPaidBy(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  className="w-full border border-gray-200 bg-gray-50 focus:bg-white transition-colors rounded-xl px-3 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-blue-500">
                   {members.map(m => (
                     <option key={m.user_id} value={m.user_id}>
                       {m.display_name || m.user_id.slice(0, 8)}{m.user_id === userId ? ' (yo)' : ''}
@@ -212,11 +219,11 @@ export default function FixedPage() {
               </div>
               <div className="flex gap-2 pt-1">
                 <button type="button" onClick={() => setShowForm(false)}
-                  className="flex-1 border border-gray-200 text-gray-700 font-semibold py-3 rounded-xl">
+                  className="flex-1 border border-gray-200 text-gray-700 font-semibold py-3.5 rounded-xl">
                   Cancelar
                 </button>
                 <button type="submit" disabled={saving}
-                  className="flex-1 bg-blue-600 disabled:opacity-60 text-white font-semibold py-3 rounded-xl">
+                  className="flex-1 bg-blue-600 disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl">
                   {saving ? 'Guardando…' : editId ? 'Actualizar' : 'Agregar'}
                 </button>
               </div>
@@ -225,18 +232,20 @@ export default function FixedPage() {
         </div>
       )}
 
-      <div className="px-4 space-y-4">
+      {/* List */}
+      <div className="px-4 space-y-4 pb-6">
         {active.length === 0 ? (
           <div className="text-center py-16 text-gray-400">
-            <p className="text-4xl mb-3">📌</p>
+            <CalendarClock size={44} className="mx-auto mb-3 opacity-20" strokeWidth={1.2} />
             <p className="text-sm">Sin gastos fijos. Agrega Netflix, renta, etc.</p>
           </div>
         ) : (
           <>
-            {/* Pending */}
             {unpaid.length > 0 && (
               <div className="space-y-2">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Pendientes ({unpaid.length})</p>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                  Pendientes ({unpaid.length})
+                </p>
                 {unpaid.map(f => (
                   <FixedCard key={f.id} fixed={f} paid={false} marking={markingId === f.id}
                     userId={userId!} memberName={memberName}
@@ -247,10 +256,11 @@ export default function FixedPage() {
                 ))}
               </div>
             )}
-            {/* Paid */}
             {paid.length > 0 && (
               <div className="space-y-2">
-                <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Pagados este mes ({paid.length})</p>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                  Pagados este mes ({paid.length})
+                </p>
                 {paid.map(f => (
                   <FixedCard key={f.id} fixed={f} paid userId={userId!} marking={false}
                     memberName={memberName} onMarkPaid={() => {}} onEdit={() => openEdit(f)} onDelete={() => handleDelete(f.id)}
@@ -271,10 +281,13 @@ function FixedCard({ fixed, paid, marking, userId, memberName, onMarkPaid, onEdi
   onMarkPaid: () => void; onEdit: () => void; onDelete: () => void
 }) {
   return (
-    <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${paid ? 'border-green-100' : 'border-gray-100'}`}>
+    <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${paid ? 'border-green-100 opacity-60' : 'border-gray-100'}`}>
       <div className="px-4 py-3 flex items-center gap-3">
         <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${paid ? 'bg-green-50' : 'bg-orange-50'}`}>
-          <span className="text-xl">{paid ? '✅' : '📌'}</span>
+          {paid
+            ? <Check size={18} className="text-green-500" strokeWidth={2.5} />
+            : <CalendarClock size={18} className="text-orange-400" strokeWidth={2} />
+          }
         </div>
         <div className="flex-1 min-w-0">
           <p className={`font-semibold text-sm ${paid ? 'text-gray-400 line-through' : 'text-gray-900'}`}>{fixed.name}</p>
@@ -287,13 +300,17 @@ function FixedCard({ fixed, paid, marking, userId, memberName, onMarkPaid, onEdi
       {!paid && (
         <div className="border-t border-gray-50 px-4 py-2.5 flex items-center gap-2">
           <button onClick={onMarkPaid} disabled={marking}
-            className="flex-1 bg-green-600 disabled:opacity-60 text-white text-sm font-semibold py-2 rounded-xl active:opacity-80">
-            {marking ? 'Registrando…' : '✓ Marcar pagado'}
+            className="flex-1 flex items-center justify-center gap-1.5 bg-green-600 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-xl active:opacity-80">
+            {marking ? 'Registrando…' : <><Check size={14} strokeWidth={3} /> Marcar pagado</>}
           </button>
           {fixed.created_by === userId && (
             <>
-              <button onClick={onEdit} className="text-gray-400 text-xs px-2 py-2">Editar</button>
-              <button onClick={onDelete} className="text-gray-400 text-xs px-2 py-2">Borrar</button>
+              <button onClick={onEdit} className="text-gray-400 active:text-blue-500 p-2">
+                <Pencil size={15} />
+              </button>
+              <button onClick={onDelete} className="text-gray-400 active:text-red-400 p-2">
+                <Trash2 size={15} />
+              </button>
             </>
           )}
         </div>

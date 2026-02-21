@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { ShoppingCart, Plus, X, Trash2, Search, Check } from 'lucide-react'
 
 type Item = { id: string; name: string; qty: string | null; note: string | null; bought: boolean; created_by: string }
 
@@ -16,22 +17,19 @@ const SUGGESTIONS = [
 
 export default function ShoppingPage() {
   const supabase = createClient()
-  const [userId, setUserId] = useState<string | null>(null)
+  const [userId,   setUserId]   = useState<string | null>(null)
   const [familyId, setFamilyId] = useState<string | null>(null)
-  const [items, setItems] = useState<Item[]>([])
-  const [loading, setLoading] = useState(true)
+  const [items,    setItems]    = useState<Item[]>([])
+  const [loading,  setLoading]  = useState(true)
   const [noFamily, setNoFamily] = useState(false)
 
-  // Add form
-  const [name, setName] = useState('')
-  const [qty, setQty] = useState('')
-  const [note, setNote] = useState('')
-  const [adding, setAdding] = useState(false)
-  const [showDetail, setShowDetail] = useState(false)
+  const [name,    setName]    = useState('')
+  const [qty,     setQty]     = useState('')
+  const [note,    setNote]    = useState('')
+  const [adding,  setAdding]  = useState(false)
+  const [showDetail,     setShowDetail]     = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(false)
-
-  // Bulk delete confirm
-  const [confirmBulk, setConfirmBulk] = useState(false)
+  const [confirmBulk,    setConfirmBulk]    = useState(false)
 
   const loadItems = useCallback(async (fid: string) => {
     const { data } = await supabase.from('shopping_items').select('*').eq('family_id', fid)
@@ -60,10 +58,7 @@ export default function ShoppingPage() {
       family_id: familyId, name: itemName.trim(),
       qty: itemQty.trim() || null, note: itemNote.trim() || null, created_by: userId,
     })
-    if (!error) {
-      setName(''); setQty(''); setNote('')
-      await loadItems(familyId!)
-    }
+    if (!error) { setName(''); setQty(''); setNote(''); await loadItems(familyId!) }
     setAdding(false); setShowDetail(false)
   }
 
@@ -95,10 +90,11 @@ export default function ShoppingPage() {
     setConfirmBulk(false)
   }
 
-  const filtered = (bgt: boolean) => items.filter(i => i.bought === bgt)
-  const filteredSuggestions = SUGGESTIONS.filter(s =>
-    name.trim() === '' || s.toLowerCase().includes(name.toLowerCase())
-  ).filter(s => !items.some(i => i.name.toLowerCase() === s.toLowerCase()))
+  const pending  = items.filter(i => !i.bought)
+  const bought   = items.filter(i => i.bought)
+  const filtSug  = SUGGESTIONS
+    .filter(s => name.trim() === '' || s.toLowerCase().includes(name.toLowerCase()))
+    .filter(s => !items.some(i => i.name.toLowerCase() === s.toLowerCase()))
 
   if (loading) return <div className="flex items-center justify-center h-64 text-gray-400 text-sm">Cargando…</div>
   if (noFamily) return (
@@ -110,12 +106,17 @@ export default function ShoppingPage() {
 
   return (
     <div className="max-w-lg mx-auto">
+      {/* Header */}
       <div className="px-4 pt-5 pb-3 flex items-center justify-between">
-        <h1 className="text-xl font-bold text-gray-900">Lista de Mercado</h1>
-        {filtered(true).length > 0 && (
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Lista de Mercado</h1>
+          <p className="text-xs text-gray-400 mt-0.5">{pending.length} pendientes · {bought.length} comprados</p>
+        </div>
+        {bought.length > 0 && (
           <button onClick={() => setConfirmBulk(true)}
-            className="text-xs text-red-400 border border-red-200 px-3 py-1.5 rounded-xl">
-            🗑 Borrar comprados
+            className="flex items-center gap-1.5 text-xs text-red-500 border border-red-200 bg-red-50 px-3 py-2 rounded-2xl font-semibold active:opacity-80">
+            <Trash2 size={12} />
+            Borrar comprados
           </button>
         )}
       </div>
@@ -124,50 +125,54 @@ export default function ShoppingPage() {
       <div className="px-4 mb-2">
         <div className="flex gap-2">
           <div className="flex-1 relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" strokeWidth={2} />
             <input
-              type="text" placeholder="🔍 Busca o escribe un ítem…" value={name}
+              type="text" placeholder="Busca o escribe un ítem…" value={name}
               onChange={e => { setName(e.target.value); setShowSuggestions(true) }}
               onFocus={() => setShowSuggestions(true)}
-              className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+              className="w-full border border-gray-200 bg-white rounded-2xl pl-9 pr-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
             />
           </div>
           <button
-            onClick={() => name.trim() ? (showDetail ? addItem(name, qty, note) : setShowDetail(true)) : setShowDetail(v => !v)}
+            onClick={() => name.trim()
+              ? (showDetail ? addItem(name, qty, note) : setShowDetail(true))
+              : setShowDetail(v => !v)
+            }
             disabled={adding}
-            className="bg-blue-600 disabled:opacity-60 text-white px-4 py-3 rounded-xl text-sm font-semibold active:opacity-80">
-            {adding ? '…' : showDetail ? 'OK' : '+'}
+            className="bg-blue-600 disabled:opacity-60 text-white px-4 py-3 rounded-2xl text-sm font-bold active:opacity-80 flex items-center gap-1">
+            {adding ? '…' : showDetail ? <Check size={16} /> : <Plus size={18} strokeWidth={2.5} />}
           </button>
         </div>
 
         {/* Detail fields */}
         {showDetail && (
           <div className="mt-2 flex gap-2">
-            <input type="text" placeholder="Cantidad (ej. 2)" value={qty}
+            <input type="text" placeholder="Cantidad (ej. 2 kg)" value={qty}
               onChange={e => setQty(e.target.value)}
-              className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="flex-1 border border-gray-200 bg-white rounded-2xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
             />
             <input type="text" placeholder="Nota opcional" value={note}
               onChange={e => setNote(e.target.value)}
-              className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="flex-1 border border-gray-200 bg-white rounded-2xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
             />
           </div>
         )}
 
-        {/* Suggestions dropdown */}
-        {showSuggestions && filteredSuggestions.length > 0 && (
+        {/* Suggestions */}
+        {showSuggestions && filtSug.length > 0 && (
           <div className="mt-1 bg-white border border-gray-200 rounded-2xl shadow-lg overflow-hidden">
             <div className="flex flex-wrap gap-2 p-3">
-              {filteredSuggestions.slice(0, 12).map(s => (
+              {filtSug.slice(0, 12).map(s => (
                 <button key={s}
                   onClick={() => { quickAdd(s); setShowSuggestions(false); setName('') }}
-                  className="bg-blue-50 text-blue-700 text-xs font-medium px-3 py-1.5 rounded-full active:bg-blue-100">
+                  className="bg-blue-50 text-blue-700 text-xs font-semibold px-3 py-1.5 rounded-full active:bg-blue-100">
                   + {s}
                 </button>
               ))}
               {name.trim() && !SUGGESTIONS.some(s => s.toLowerCase() === name.toLowerCase()) && (
                 <button onClick={() => { addItem(name); setShowSuggestions(false) }}
-                  className="bg-gray-100 text-gray-700 text-xs font-medium px-3 py-1.5 rounded-full active:bg-gray-200">
-                  + Crear "{name}"
+                  className="bg-gray-100 text-gray-700 text-xs font-semibold px-3 py-1.5 rounded-full active:bg-gray-200">
+                  + Crear &ldquo;{name}&rdquo;
                 </button>
               )}
             </div>
@@ -180,36 +185,40 @@ export default function ShoppingPage() {
       {/* Bulk delete confirm */}
       {confirmBulk && (
         <div className="mx-4 mb-3 bg-red-50 rounded-2xl p-4 flex items-center gap-3 border border-red-200">
-          <p className="flex-1 text-sm text-red-700 font-medium">¿Borrar {filtered(true).length} comprados?</p>
-          <button onClick={deleteBought} className="bg-red-600 text-white text-xs font-bold px-3 py-1.5 rounded-lg">Sí</button>
+          <p className="flex-1 text-sm text-red-700 font-medium">¿Borrar {bought.length} comprados?</p>
+          <button onClick={deleteBought} className="bg-red-600 text-white text-xs font-bold px-3 py-1.5 rounded-xl">Sí, borrar</button>
           <button onClick={() => setConfirmBulk(false)} className="text-gray-500 text-xs px-2 py-1.5">No</button>
         </div>
       )}
 
-      {/* Empty */}
+      {/* Empty state */}
       {items.length === 0 && (
         <div className="text-center py-14 text-gray-400">
-          <p className="text-4xl mb-3">🛒</p>
+          <ShoppingCart size={44} className="mx-auto mb-3 opacity-20" strokeWidth={1.2} />
           <p className="text-sm">Lista vacía. ¡Agrega algo!</p>
         </div>
       )}
 
-      {/* Pending items */}
-      {filtered(false).length > 0 && (
+      {/* Pending */}
+      {pending.length > 0 && (
         <div className="px-4 space-y-2 mb-4">
-          <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Por comprar ({filtered(false).length})</p>
-          {filtered(false).map(item => (
+          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+            Por comprar ({pending.length})
+          </p>
+          {pending.map(item => (
             <ShoppingCard key={item.id} item={item} userId={userId!}
               onToggle={() => toggleBought(item)} onDelete={() => deleteItem(item.id)} />
           ))}
         </div>
       )}
 
-      {/* Bought items */}
-      {filtered(true).length > 0 && (
+      {/* Bought */}
+      {bought.length > 0 && (
         <div className="px-4 space-y-2">
-          <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Comprado ({filtered(true).length})</p>
-          {filtered(true).map(item => (
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+            Comprado ({bought.length})
+          </p>
+          {bought.map(item => (
             <ShoppingCard key={item.id} item={item} userId={userId!}
               onToggle={() => toggleBought(item)} onDelete={() => deleteItem(item.id)} />
           ))}
@@ -223,22 +232,26 @@ function ShoppingCard({ item, userId, onToggle, onDelete }: {
   item: Item; userId: string; onToggle: () => void; onDelete: () => void
 }) {
   return (
-    <div className={`bg-white rounded-2xl border shadow-sm px-4 py-3 flex items-center gap-3 ${item.bought ? 'border-gray-100 opacity-60' : 'border-gray-100'}`}>
+    <div className={`bg-white rounded-2xl border shadow-sm px-4 py-3 flex items-center gap-3 transition-opacity ${
+      item.bought ? 'border-gray-100 opacity-55' : 'border-gray-100'
+    }`}>
       <button onClick={onToggle}
-        className={`w-7 h-7 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+        className={`w-7 h-7 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all ${
           item.bought ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 active:border-blue-400'
         }`}>
-        {item.bought && <span className="text-sm font-bold">✓</span>}
+        {item.bought && <Check size={14} strokeWidth={3} />}
       </button>
       <div className="flex-1 min-w-0">
-        <p className={`font-medium text-sm ${item.bought ? 'line-through text-gray-400' : 'text-gray-900'}`}>
+        <p className={`font-semibold text-sm ${item.bought ? 'line-through text-gray-400' : 'text-gray-900'}`}>
           {item.name}
           {item.qty && <span className="text-gray-400 font-normal ml-1">× {item.qty}</span>}
         </p>
-        {item.note && <p className="text-xs text-gray-400 truncate">{item.note}</p>}
+        {item.note && <p className="text-xs text-gray-400 truncate mt-0.5">{item.note}</p>}
       </div>
       {item.created_by === userId && (
-        <button onClick={onDelete} className="text-gray-300 active:text-red-400 text-sm flex-shrink-0 p-1">✕</button>
+        <button onClick={onDelete} className="text-gray-300 active:text-red-400 flex-shrink-0 p-1">
+          <X size={15} />
+        </button>
       )}
     </div>
   )

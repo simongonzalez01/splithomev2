@@ -2,14 +2,15 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { Home, Receipt, CalendarClock, ShoppingCart, Calendar, CircleUser } from 'lucide-react'
 
-const navItems = [
-  { href: '/',         label: 'Home',    icon: '🏠' },
-  { href: '/expenses', label: 'Gastos',  icon: '💸' },
-  { href: '/fixed',    label: 'Fijos',   icon: '📌' },
-  { href: '/shopping', label: 'Lista',   icon: '🛒' },
-  { href: '/events',   label: 'Eventos', icon: '📅' },
-  { href: '/profile',  label: 'Perfil',  icon: '👤' },
+const NAV = [
+  { href: '/',         label: 'Inicio',  Icon: Home         },
+  { href: '/expenses', label: 'Gastos',  Icon: Receipt      },
+  { href: '/fixed',    label: 'Fijos',   Icon: CalendarClock },
+  { href: '/shopping', label: 'Lista',   Icon: ShoppingCart },
+  { href: '/events',   label: 'Eventos', Icon: Calendar     },
+  { href: '/profile',  label: 'Perfil',  Icon: CircleUser   },
 ]
 
 export default function BottomNav() {
@@ -17,27 +18,32 @@ export default function BottomNav() {
 
   return (
     <nav
-      className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-200"
+      className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-200/80"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
-      <div className="flex items-stretch">
-        {navItems.map(item => {
-          const active = pathname === item.href
+      <div className="flex items-stretch max-w-screen-sm mx-auto">
+        {NAV.map(({ href, label, Icon }) => {
+          const active = href === '/' ? pathname === '/' : pathname.startsWith(href)
           return (
             <Link
-              key={item.href}
-              href={item.href}
-              className={`relative flex-1 flex flex-col items-center justify-center py-2 min-h-[54px] transition-colors ${
-                active ? 'text-blue-600' : 'text-gray-400'
-              }`}
+              key={href}
+              href={href}
+              className="flex-1 flex flex-col items-center justify-center py-2 min-h-[58px]"
             >
-              {active && (
-                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-blue-600 rounded-full" />
-              )}
-              <span className="text-[19px] leading-none">{item.icon}</span>
-              <span className={`text-[10px] mt-0.5 font-semibold tracking-tight ${active ? 'text-blue-600' : 'text-gray-400'}`}>
-                {item.label}
-              </span>
+              <div className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-2xl transition-all ${
+                active ? 'bg-blue-50' : ''
+              }`}>
+                <Icon
+                  size={22}
+                  strokeWidth={active ? 2.2 : 1.6}
+                  className={active ? 'text-blue-600' : 'text-gray-400'}
+                />
+                <span className={`text-[10px] font-semibold leading-none ${
+                  active ? 'text-blue-600' : 'text-gray-400'
+                }`}>
+                  {label}
+                </span>
+              </div>
             </Link>
           )
         })}

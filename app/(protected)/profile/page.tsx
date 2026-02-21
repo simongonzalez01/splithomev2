@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { Copy, Check, LogOut, ChevronRight, X, Plus } from 'lucide-react'
 
 type Member = { user_id: string; display_name: string | null }
 type Settlement = { id: string; from_user: string; to_user: string; amount: number; date: string; note: string | null; created_by: string }
@@ -56,7 +57,6 @@ export default function ProfilePage() {
         setMembers(mems ?? [])
         const other = (mems ?? []).find(m => m.user_id !== user.id)
         if (other) setToUser(other.user_id)
-        // Load this month's settlements
         const { data: settles } = await supabase.from('settlements').select('*')
           .eq('family_id', profile.family_id).gte('date', monthFirst()).lte('date', monthLast())
           .order('created_at', { ascending: false })
@@ -102,19 +102,21 @@ export default function ProfilePage() {
 
   if (loading) return <div className="flex items-center justify-center h-64 text-gray-400 text-sm">Cargando…</div>
 
+  const initials = (displayName || email || 'U')[0].toUpperCase()
+
   return (
-    <div className="max-w-lg mx-auto px-4 pt-5 pb-6 space-y-5">
+    <div className="max-w-lg mx-auto px-4 pt-5 pb-6 space-y-4">
       <h1 className="text-xl font-bold text-gray-900">Perfil</h1>
 
       {/* User info */}
       <section className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-full bg-blue-100 flex items-center justify-center text-2xl font-bold text-blue-600">
-            {(displayName || email || 'U')[0].toUpperCase()}
+          <div className="w-14 h-14 rounded-full bg-blue-100 flex items-center justify-center text-2xl font-bold text-blue-600 flex-shrink-0">
+            {initials}
           </div>
-          <div>
-            <p className="font-bold text-gray-900 text-lg">{displayName || 'Sin nombre'}</p>
-            <p className="text-sm text-gray-400">{email}</p>
+          <div className="min-w-0">
+            <p className="font-bold text-gray-900 text-lg truncate">{displayName || 'Sin nombre'}</p>
+            <p className="text-sm text-gray-400 truncate">{email}</p>
           </div>
         </div>
       </section>
@@ -131,8 +133,11 @@ export default function ProfilePage() {
             <div className="flex items-center gap-3">
               <span className="text-3xl font-black font-mono tracking-widest text-blue-800">{familyCode}</span>
               <button onClick={copyCode}
-                className="ml-auto bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-xl active:opacity-80">
-                {copied ? '✅ Copiado' : 'Copiar'}
+                className="ml-auto flex items-center gap-1.5 bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-xl active:opacity-80">
+                {copied
+                  ? <><Check size={14} strokeWidth={3} /> Copiado</>
+                  : <><Copy size={14} /> Copiar</>
+                }
               </button>
             </div>
             <p className="text-xs text-blue-500 mt-2">Comparte este código para invitar a tu familia</p>
@@ -171,8 +176,8 @@ export default function ProfilePage() {
           <div className="flex items-center justify-between">
             <h2 className="font-bold text-gray-800">Pagos / Liquidaciones</h2>
             <button onClick={() => setShowSettle(true)}
-              className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-xl font-semibold">
-              + Registrar
+              className="flex items-center gap-1 text-xs bg-blue-600 text-white px-3 py-1.5 rounded-xl font-semibold">
+              <Plus size={12} strokeWidth={2.5} /> Registrar
             </button>
           </div>
 
@@ -184,13 +189,17 @@ export default function ProfilePage() {
                 <div key={s.id} className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2.5">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-800">
-                      <span className="text-blue-600">{memberName(s.from_user)}</span> → <span className="text-green-600">{memberName(s.to_user)}</span>
+                      <span className="text-blue-600">{memberName(s.from_user)}</span>
+                      {' → '}
+                      <span className="text-green-600">{memberName(s.to_user)}</span>
                     </p>
                     <p className="text-xs text-gray-400">{s.date}{s.note ? ` · ${s.note}` : ''}</p>
                   </div>
                   <span className="font-bold text-gray-900">${Number(s.amount).toFixed(2)}</span>
                   {s.created_by === userId && (
-                    <button onClick={() => deleteSettlement(s.id)} className="text-gray-300 active:text-red-400 text-xs p-1">✕</button>
+                    <button onClick={() => deleteSettlement(s.id)} className="text-gray-300 active:text-red-400 p-1">
+                      <X size={14} />
+                    </button>
                   )}
                 </div>
               ))}
@@ -205,21 +214,24 @@ export default function ProfilePage() {
           <div className="bg-white w-full rounded-t-3xl p-5 space-y-3"
             onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-1" />
-            <h2 className="text-lg font-bold">Registrar pago</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold">Registrar pago</h2>
+              <button onClick={() => setShowSettle(false)} className="text-gray-400 p-1"><X size={20} /></button>
+            </div>
             <form onSubmit={handleAddSettlement} className="space-y-3">
               {settleError && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-xl">{settleError}</p>}
               <div className="flex gap-2">
                 <div className="flex-1">
                   <label className="text-xs font-medium text-gray-500 mb-1 block">De</label>
                   <select value={fromUser} onChange={e => setFromUser(e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    className="w-full border border-gray-200 bg-gray-50 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                     {members.map(m => <option key={m.user_id} value={m.user_id}>{m.display_name || m.user_id.slice(0, 8)}</option>)}
                   </select>
                 </div>
                 <div className="flex-1">
                   <label className="text-xs font-medium text-gray-500 mb-1 block">Para</label>
                   <select value={toUser} onChange={e => setToUser(e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    className="w-full border border-gray-200 bg-gray-50 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                     {members.map(m => <option key={m.user_id} value={m.user_id}>{m.display_name || m.user_id.slice(0, 8)}</option>)}
                   </select>
                 </div>
@@ -227,14 +239,14 @@ export default function ProfilePage() {
               <div className="flex gap-2">
                 <input type="number" required min="0.01" step="0.01" placeholder="Monto $"
                   value={settleAmount} onChange={e => setSettleAmount(e.target.value)}
-                  className="flex-1 border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 border border-gray-200 bg-gray-50 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <input type="date" required value={settleDate} onChange={e => setSettleDate(e.target.value)}
-                  className="flex-1 border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 border border-gray-200 bg-gray-50 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
               <input type="text" placeholder="Nota (opcional)" value={settleNote} onChange={e => setSettleNote(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-gray-200 bg-gray-50 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
               <div className="flex gap-2 pt-1">
                 <button type="button" onClick={() => setShowSettle(false)}
@@ -254,18 +266,19 @@ export default function ProfilePage() {
         <Link href="/history" className="flex items-center gap-3 px-5 py-4 active:bg-gray-50">
           <span className="text-xl">📊</span>
           <span className="text-sm font-medium text-gray-800">Historial de meses</span>
-          <span className="ml-auto text-gray-300">›</span>
+          <ChevronRight size={16} className="ml-auto text-gray-300" />
         </Link>
         <Link href="/budgets" className="flex items-center gap-3 px-5 py-4 active:bg-gray-50">
           <span className="text-xl">💰</span>
           <span className="text-sm font-medium text-gray-800">Presupuestos</span>
-          <span className="ml-auto text-gray-300">›</span>
+          <ChevronRight size={16} className="ml-auto text-gray-300" />
         </Link>
       </section>
 
       {/* Logout */}
       <button onClick={handleLogout}
-        className="w-full bg-red-50 border border-red-200 text-red-600 font-semibold py-4 rounded-2xl text-sm active:opacity-80">
+        className="w-full flex items-center justify-center gap-2 bg-red-50 border border-red-200 text-red-600 font-semibold py-4 rounded-2xl text-sm active:opacity-80">
+        <LogOut size={16} />
         Cerrar sesión
       </button>
     </div>

@@ -7,9 +7,15 @@ html {
 }
 
 body {
-  @apply bg-white text-gray-900;
+  @apply text-gray-900;
+  background-color: #f5f6fa;
   /* Bottom nav height compensation */
   padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* iOS input tap flicker */
+input, button, select, textarea {
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Safe area for iPhone notch / home indicator */
