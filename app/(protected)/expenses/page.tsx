@@ -12,6 +12,7 @@ import { Search, Plus, X, MessageSquare, Receipt, Pencil, Trash2, Download } fro
 type Expense = {
   id: string; title: string; amount: number; date: string
   category: string; paid_by: string; note: string | null; created_at: string
+  split_mode: string | null
 }
 type Note   = { id: string; expense_id: string; user_id: string; content: string; created_at: string }
 type Member = { user_id: string; display_name: string | null }
@@ -69,7 +70,7 @@ export default function ExpensesPage() {
   const [expNote,   setExpNote]   = useState('')
   const [formError, setFormError] = useState('')
   const [saving,    setSaving]    = useState(false)
-  const [split,     setSplit]     = useState<'50/50' | 'personal'>('50/50')
+  const [split,     setSplit]     = useState<'50/50' | 'personal' | 'para_otro'>('50/50')
 
   // Custom categories
   const [customCats,    setCustomCats]    = useState<Category[]>([])
@@ -133,7 +134,9 @@ export default function ExpensesPage() {
   function openEdit(e: Expense) {
     setEditId(e.id); setTitle(e.title); setAmount(String(e.amount))
     setDate(e.date); setCategory(e.category); setPaidBy(e.paid_by)
-    setExpNote(e.note ?? ''); setSplit('50/50'); setFormError(''); setShowCatInput(false); setNewCatLabel(''); setShowForm(true)
+    setExpNote(e.note ?? '')
+    setSplit((e.split_mode as '50/50' | 'personal' | 'para_otro') ?? '50/50')
+    setFormError(''); setShowCatInput(false); setNewCatLabel(''); setShowForm(true)
   }
 
   async function handleSave(ev: React.FormEvent) {
@@ -143,12 +146,12 @@ export default function ExpensesPage() {
     setSaving(true)
     if (editId) {
       const { error } = await supabase.from('expenses')
-        .update({ title, amount: amt, date, category, paid_by: paidBy, note: expNote || null })
+        .update({ title, amount: amt, date, category, paid_by: paidBy, note: expNote || null, split_mode: split })
         .eq('id', editId)
       if (error) { setFormError(error.message); setSaving(false); return }
     } else {
       const { error } = await supabase.from('expenses')
-        .insert({ family_id: familyId, title, amount: amt, date, category, paid_by: paidBy, note: expNote || null })
+        .insert({ family_id: familyId, title, amount: amt, date, category, paid_by: paidBy, note: expNote || null, split_mode: split })
       if (error) { setFormError(error.message); setSaving(false); return }
     }
     setSaving(false); setShowForm(false)
@@ -447,9 +450,9 @@ export default function ExpensesPage() {
               {/* División — toggle */}
               <div>
                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">División</label>
-                <div className="flex gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <button type="button" onClick={() => setSplit('50/50')}
-                    className={`flex-1 py-3 rounded-2xl font-semibold text-sm border-2 transition-all active:scale-95 ${
+                    className={`py-3 rounded-2xl font-semibold text-sm border-2 transition-all active:scale-95 ${
                       split === '50/50'
                         ? 'border-green-500 bg-green-500 text-white shadow-sm'
                         : 'border-gray-200 bg-white text-gray-600'
@@ -457,18 +460,28 @@ export default function ExpensesPage() {
                     50 / 50
                   </button>
                   <button type="button" onClick={() => setSplit('personal')}
-                    className={`flex-1 py-3 rounded-2xl font-semibold text-sm border-2 transition-all active:scale-95 ${
+                    className={`py-3 rounded-2xl font-semibold text-sm border-2 transition-all active:scale-95 ${
                       split === 'personal'
                         ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
                         : 'border-gray-200 bg-white text-gray-600'
                     }`}>
-                    Solo uno
+                    Solo mío
+                  </button>
+                  <button type="button" onClick={() => setSplit('para_otro')}
+                    className={`py-3 rounded-2xl font-semibold text-sm border-2 transition-all active:scale-95 ${
+                      split === 'para_otro'
+                        ? 'border-amber-500 bg-amber-500 text-white shadow-sm'
+                        : 'border-gray-200 bg-white text-gray-600'
+                    }`}>
+                    Para otro
                   </button>
                 </div>
                 <p className="text-[11px] text-gray-400 mt-1.5 text-center">
                   {split === '50/50'
                     ? 'Cada uno paga la mitad del gasto'
-                    : 'El que pagó asume el gasto completo'}
+                    : split === 'personal'
+                    ? 'El que pagó asume el gasto completo'
+                    : 'Yo pagué, pero es gasto del otro — me debe todo'}
                 </p>
               </div>
 
@@ -522,9 +535,21 @@ export default function ExpensesPage() {
                     <p className="text-[11px] text-gray-400 mt-0.5">
                       {fmtDate(exp.date)} · {getCategoryLabel(exp.category)}
                     </p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">
-                      Pagó: <span className="font-semibold text-gray-600">{memberName(exp.paid_by)}</span>
-                      {exp.paid_by === userId && <span className="text-gray-400"> (yo)</span>}
+                    <p className="text-[11px] text-gray-400 mt-0.5 flex items-center flex-wrap gap-1">
+                      <span>
+                        Pagó: <span className="font-semibold text-gray-600">{memberName(exp.paid_by)}</span>
+                        {exp.paid_by === userId && <span className="text-gray-400"> (yo)</span>}
+                      </span>
+                      {exp.split_mode === 'para_otro' && (
+                        <span className="bg-amber-50 text-amber-600 text-[10px] font-bold px-1.5 py-0.5 rounded-full border border-amber-100 leading-none">
+                          cargo de {memberName(members.find(m => m.user_id !== exp.paid_by)?.user_id ?? '')}
+                        </span>
+                      )}
+                      {exp.split_mode === 'personal' && (
+                        <span className="bg-gray-100 text-gray-500 text-[10px] font-semibold px-1.5 py-0.5 rounded-full leading-none">
+                          personal
+                        </span>
+                      )}
                     </p>
                     {exp.note && <p className="text-[11px] text-blue-500 italic mt-0.5 truncate">&quot;{exp.note}&quot;</p>}
                   </div>

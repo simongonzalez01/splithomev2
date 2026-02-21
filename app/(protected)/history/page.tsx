@@ -14,7 +14,7 @@ type Snapshot = {
   created_at: string
 }
 type LiveExpense = {
-  id: string; title: string; amount: number; date: string; category: string; paid_by: string
+  id: string; title: string; amount: number; date: string; category: string; paid_by: string; split_mode: string | null
 }
 type Member = { user_id: string; display_name: string | null }
 
@@ -67,7 +67,7 @@ export default function HistoryPage() {
     const first = monthFirst(), last = monthLast(first)
     const { data } = await supabase
       .from('expenses')
-      .select('id, title, amount, date, category, paid_by')
+      .select('id, title, amount, date, category, paid_by, split_mode')
       .eq('family_id', fid).gte('date', first).lte('date', last)
       .order('date', { ascending: false })
     setLiveExpenses(data ?? [])
@@ -124,12 +124,31 @@ export default function HistoryPage() {
   const liveByCat:    Record<string, number> = {}
   const liveByMember: Record<string, number> = {}
   for (const e of liveExpenses) {
-    liveByCat[e.category]    = (liveByCat[e.category]    ?? 0) + Number(e.amount)
-    liveByMember[e.paid_by]  = (liveByMember[e.paid_by]  ?? 0) + Number(e.amount)
+    liveByCat[e.category]   = (liveByCat[e.category]   ?? 0) + Number(e.amount)
+    liveByMember[e.paid_by] = (liveByMember[e.paid_by] ?? 0) + Number(e.amount)
   }
-  const numMembers = members.length || 1
-  const fairShare  = liveTotal / numMembers
   const topLiveCats = Object.entries(liveByCat).sort((a, b) => b[1] - a[1]).slice(0, 4)
+
+  // Net balance per member considering all split modes:
+  //   '50/50'    → payer is owed half by the other
+  //   'personal' → payer absorbs it, no balance effect
+  //   'para_otro'→ payer is owed the full amount by the other
+  const liveBalance: Record<string, number> = {}
+  for (const m of members) liveBalance[m.user_id] = 0
+  for (const e of liveExpenses) {
+    const amt   = Number(e.amount)
+    const mode  = e.split_mode ?? '50/50'
+    const other = members.find(m => m.user_id !== e.paid_by)?.user_id
+    if (!other) continue
+    if (mode === '50/50') {
+      liveBalance[e.paid_by] = (liveBalance[e.paid_by] ?? 0) + amt / 2
+      liveBalance[other]     = (liveBalance[other]     ?? 0) - amt / 2
+    } else if (mode === 'para_otro') {
+      liveBalance[e.paid_by] = (liveBalance[e.paid_by] ?? 0) + amt
+      liveBalance[other]     = (liveBalance[other]     ?? 0) - amt
+    }
+    // 'personal': no change to balance
+  }
 
   function handleExportLive() {
     const rows = liveExpenses.map(e => [
@@ -202,7 +221,7 @@ export default function HistoryPage() {
                 <div className="space-y-1.5">
                   {members.map(m => {
                     const paid    = liveByMember[m.user_id] ?? 0
-                    const balance = paid - fairShare
+                    const balance = liveBalance[m.user_id]  ?? 0
                     return (
                       <div key={m.user_id} className="flex items-center justify-between">
                         <span className="text-xs text-gray-700 font-medium">
@@ -212,11 +231,17 @@ export default function HistoryPage() {
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-gray-500">${paid.toFixed(2)} pagado</span>
                           <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded-lg ${
-                            balance >= 0
+                            Math.abs(balance) < 0.01
+                              ? 'text-gray-500 bg-gray-100'
+                              : balance > 0
                               ? 'text-green-700 bg-green-50'
                               : 'text-red-600 bg-red-50'
                           }`}>
-                            {balance >= 0 ? `+$${balance.toFixed(2)}` : `-$${Math.abs(balance).toFixed(2)}`}
+                            {Math.abs(balance) < 0.01
+                              ? 'par ✓'
+                              : balance > 0
+                              ? `le deben $${balance.toFixed(2)}`
+                              : `debe $${Math.abs(balance).toFixed(2)}`}
                           </span>
                         </div>
                       </div>
