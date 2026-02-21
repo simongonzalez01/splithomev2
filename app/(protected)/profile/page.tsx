@@ -106,7 +106,12 @@ export default function ProfilePage() {
   async function handleRemoveMember(memberId: string, memberName: string) {
     if (!confirm(`¿Eliminar a ${memberName} de la familia? Perderá acceso a los gastos compartidos.`)) return
     setRemovingMember(memberId)
-    await supabase.from('profiles').update({ family_id: null }).eq('user_id', memberId)
+    const { error } = await supabase.rpc('remove_family_member', { p_member_id: memberId })
+    if (error) {
+      alert('Error al eliminar miembro: ' + error.message)
+      setRemovingMember(null)
+      return
+    }
     setMembers(prev => prev.filter(m => m.user_id !== memberId))
     setRemovingMember(null)
   }
