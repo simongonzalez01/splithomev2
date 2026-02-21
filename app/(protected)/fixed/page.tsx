@@ -9,7 +9,7 @@ import { CalendarClock, Plus, X, Check, Pencil, Trash2, Bell, RefreshCw, Zap } f
 type FixedExpense = {
   id: string; name: string; amount: number; category: string
   due_day: number; default_paid_by: string | null; is_active: boolean; created_by: string
-  start_date: string | null; is_recurring: boolean | null
+  start_date: string | null; is_recurring: boolean | null; split_mode: string | null
 }
 
 function monthFirst() {
@@ -53,6 +53,7 @@ export default function FixedPage() {
   const [defaultPaidBy, setDefaultPaidBy] = useState('')
   const [startDate,     setStartDate]     = useState(todayStr())
   const [isRecurring,   setIsRecurring]   = useState(true)
+  const [splitMode,     setSplitMode]     = useState<'50/50' | 'personal' | 'para_otro'>('50/50')
   const [formError,     setFormError]     = useState('')
   const [saving,        setSaving]        = useState(false)
 
@@ -94,7 +95,7 @@ export default function FixedPage() {
     setName(preset?.name ?? ''); setAmount(preset?.amount ? String(preset.amount) : '')
     setCategory(preset?.category ?? DEFAULT_CATEGORY); setDueDay('1')
     setDefaultPaidBy(userId ?? ''); setStartDate(todayStr()); setIsRecurring(true)
-    setFormError(''); setShowForm(true); setShowPresets(false)
+    setSplitMode('50/50'); setFormError(''); setShowForm(true); setShowPresets(false)
   }
 
   function openEdit(f: FixedExpense) {
@@ -103,6 +104,7 @@ export default function FixedPage() {
     setDefaultPaidBy(f.default_paid_by ?? userId ?? '')
     setStartDate(f.start_date ?? todayStr())
     setIsRecurring(f.is_recurring ?? true)
+    setSplitMode((f.split_mode as '50/50' | 'personal' | 'para_otro') ?? '50/50')
     setFormError(''); setShowForm(true)
   }
 
@@ -118,6 +120,7 @@ export default function FixedPage() {
       default_paid_by: defaultPaidBy,
       start_date: startDate || null,
       is_recurring: isRecurring,
+      split_mode: splitMode,
     }
     if (editId) {
       const { error } = await supabase.from('fixed_expenses').update(payload).eq('id', editId)
@@ -135,7 +138,7 @@ export default function FixedPage() {
     setMarkingId(f.id); setPendingMark(null)
     const month = monthFirstOf(payDate)
     const { data: exp, error: expErr } = await supabase.from('expenses')
-      .insert({ family_id: familyId, title: f.name, amount: f.amount, date: payDate, category: f.category, paid_by: f.default_paid_by ?? userId })
+      .insert({ family_id: familyId, title: f.name, amount: f.amount, date: payDate, category: f.category, paid_by: f.default_paid_by ?? userId, split_mode: f.split_mode ?? '50/50' })
       .select().single()
     if (expErr || !exp) { setMarkingId(null); return }
     await supabase.from('fixed_expense_payments')
@@ -375,14 +378,68 @@ export default function FixedPage() {
               {/* Quién paga */}
               <div>
                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Quién paga</label>
-                <select value={defaultPaidBy} onChange={e => setDefaultPaidBy(e.target.value)}
-                  className="w-full border border-gray-200 bg-gray-50 focus:bg-white transition-colors rounded-xl px-3 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-blue-500">
-                  {members.map(m => (
-                    <option key={m.user_id} value={m.user_id}>
-                      {m.display_name || m.user_id.slice(0, 8)}{m.user_id === userId ? ' (yo)' : ''}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex gap-2">
+                  {members.map(m => {
+                    const sel = defaultPaidBy === m.user_id
+                    return (
+                      <button key={m.user_id} type="button"
+                        onClick={() => setDefaultPaidBy(m.user_id)}
+                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-semibold text-sm border-2 transition-all active:scale-95 ${
+                          sel
+                            ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
+                            : 'border-gray-200 bg-white text-gray-700'
+                        }`}>
+                        <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0 ${
+                          sel ? 'bg-white/20' : 'bg-gray-100 text-gray-600'
+                        }`}>
+                          {(m.display_name ?? '?')[0].toUpperCase()}
+                        </span>
+                        <span className="truncate">{m.display_name ?? m.user_id.slice(0, 8)}</span>
+                        {m.user_id === userId && (
+                          <span className={`text-[10px] flex-shrink-0 ${sel ? 'opacity-60' : 'text-gray-400'}`}>(yo)</span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* División */}
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">División</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button type="button" onClick={() => setSplitMode('50/50')}
+                    className={`py-3 rounded-2xl font-semibold text-sm border-2 transition-all active:scale-95 ${
+                      splitMode === '50/50'
+                        ? 'border-green-500 bg-green-500 text-white shadow-sm'
+                        : 'border-gray-200 bg-white text-gray-600'
+                    }`}>
+                    50 / 50
+                  </button>
+                  <button type="button" onClick={() => setSplitMode('personal')}
+                    className={`py-3 rounded-2xl font-semibold text-sm border-2 transition-all active:scale-95 ${
+                      splitMode === 'personal'
+                        ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
+                        : 'border-gray-200 bg-white text-gray-600'
+                    }`}>
+                    Solo mío
+                  </button>
+                  <button type="button" onClick={() => setSplitMode('para_otro')}
+                    className={`py-3 rounded-2xl font-semibold text-sm border-2 transition-all active:scale-95 ${
+                      splitMode === 'para_otro'
+                        ? 'border-amber-500 bg-amber-500 text-white shadow-sm'
+                        : 'border-gray-200 bg-white text-gray-600'
+                    }`}>
+                    Para otro
+                  </button>
+                </div>
+                <p className="text-[11px] text-gray-400 mt-1.5 text-center">
+                  {splitMode === '50/50'
+                    ? 'Cada uno paga la mitad del gasto'
+                    : splitMode === 'personal'
+                    ? 'El que paga asume el gasto completo'
+                    : 'Yo pagué, pero es gasto del otro — me debe todo'}
+                </p>
               </div>
             </form>
 
@@ -418,7 +475,7 @@ export default function FixedPage() {
                 </p>
                 {unpaid.map(f => (
                   <FixedCard key={f.id} fixed={f} paid={false} marking={markingId === f.id}
-                    userId={userId!} memberName={memberName}
+                    userId={userId!} memberName={memberName} members={members}
                     daysUntil={daysUntilDue(f.due_day)}
                     onMarkPaid={() => setPendingMark({ fixed: f, date: todayStr() })}
                     onEdit={() => openEdit(f)}
@@ -434,7 +491,7 @@ export default function FixedPage() {
                 </p>
                 {paid.map(f => (
                   <FixedCard key={f.id} fixed={f} paid userId={userId!} marking={false}
-                    memberName={memberName} daysUntil={null}
+                    memberName={memberName} members={members} daysUntil={null}
                     onMarkPaid={() => {}} onEdit={() => openEdit(f)} onDelete={() => handleDelete(f.id)}
                   />
                 ))}
@@ -447,15 +504,18 @@ export default function FixedPage() {
   )
 }
 
-function FixedCard({ fixed, paid, marking, userId, memberName, daysUntil, onMarkPaid, onEdit, onDelete }: {
+function FixedCard({ fixed, paid, marking, userId, memberName, members, daysUntil, onMarkPaid, onEdit, onDelete }: {
   fixed: FixedExpense; paid: boolean; marking: boolean; userId: string
   memberName: (uid: string | null) => string
+  members: { user_id: string; display_name: string | null }[]
   daysUntil: number | null
   onMarkPaid: () => void; onEdit: () => void; onDelete: () => void
 }) {
-  const recurring = fixed.is_recurring ?? true
-  const urgent    = daysUntil !== null && daysUntil <= 2
-  const soon      = daysUntil !== null && daysUntil <= 5 && daysUntil > 2
+  const recurring  = fixed.is_recurring ?? true
+  const splitMode  = fixed.split_mode ?? '50/50'
+  const urgent     = daysUntil !== null && daysUntil <= 2
+  const soon       = daysUntil !== null && daysUntil <= 5 && daysUntil > 2
+  const otherMember = members.find(m => m.user_id !== fixed.default_paid_by)
 
   return (
     <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${
@@ -501,13 +561,25 @@ function FixedCard({ fixed, paid, marking, userId, memberName, daysUntil, onMark
                 {recurring ? 'Mensual' : 'Una vez'}
               </span>
             )}
+            {/* Split mode badge */}
+            {splitMode === 'para_otro' && (
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 bg-amber-50 text-amber-600 border border-amber-100">
+                cargo de {otherMember?.display_name ?? 'otro'}
+              </span>
+            )}
+            {splitMode === 'personal' && (
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 bg-gray-100 text-gray-500">
+                personal
+              </span>
+            )}
           </div>
           <p className="text-xs text-gray-400 mt-0.5">
-            {fixed.category} · Día {fixed.due_day}
+            Paga: <span className="font-medium text-gray-600">{memberName(fixed.default_paid_by)}</span>
+            {fixed.default_paid_by === userId && <span className="text-gray-400"> (yo)</span>}
+            {' · '} Día {fixed.due_day}
             {fixed.start_date && (
               <> · desde {new Date(fixed.start_date + 'T12:00:00').toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' })}</>
             )}
-            {' · '}{memberName(fixed.default_paid_by)}
           </p>
         </div>
 
