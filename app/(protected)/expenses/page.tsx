@@ -2,8 +2,12 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { CATEGORIES, CATEGORY_GROUPS, GROUP_COLORS, DEFAULT_CATEGORY, getCategoryLabel } from '@/lib/categories'
-import { Search, Plus, X, MessageSquare, Receipt, Pencil, Trash2 } from 'lucide-react'
+import {
+  CATEGORIES, CATEGORY_GROUPS, GROUP_COLORS, DEFAULT_CATEGORY,
+  getCategoryLabel, getCustomCategories, addCustomCategory, removeCustomCategory,
+  type Category,
+} from '@/lib/categories'
+import { Search, Plus, X, MessageSquare, Receipt, Pencil, Trash2, Download } from 'lucide-react'
 
 type Expense = {
   id: string; title: string; amount: number; date: string
@@ -19,6 +23,24 @@ function monthStart() {
 }
 function fmtDate(s: string) {
   return new Date(s + 'T12:00:00').toLocaleDateString('es', { weekday: 'short', day: 'numeric', month: 'short' })
+}
+
+function exportToCSV(expenses: Expense[], members: Member[], month: string) {
+  const name = (uid: string) => members.find(m => m.user_id === uid)?.display_name ?? uid.slice(0, 8)
+  const headers = ['Fecha', 'Descripción', 'Monto', 'Categoría', 'Pagó']
+  const rows = expenses.map(e => [
+    e.date, e.title, Number(e.amount).toFixed(2), getCategoryLabel(e.category), name(e.paid_by),
+  ])
+  const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a'); a.href = url; a.download = `gastos_${month}.csv`; a.click()
+  URL.revokeObjectURL(url)
+}
+
+const CUSTOM_COLORS = {
+  tile:     'bg-violet-50 text-violet-700 border-violet-100',
+  selected: 'bg-violet-600 text-white border-violet-600',
 }
 
 export default function ExpensesPage() {
@@ -48,6 +70,11 @@ export default function ExpensesPage() {
   const [formError, setFormError] = useState('')
   const [saving,    setSaving]    = useState(false)
   const [split,     setSplit]     = useState<'50/50' | 'personal'>('50/50')
+
+  // Custom categories
+  const [customCats,    setCustomCats]    = useState<Category[]>([])
+  const [showCatInput,  setShowCatInput]  = useState(false)
+  const [newCatLabel,   setNewCatLabel]   = useState('')
 
   // Note panel
   const [openNotes,  setOpenNotes]  = useState<string | null>(null)
@@ -85,6 +112,8 @@ export default function ExpensesPage() {
       setLoading(false)
     }
     init()
+    // Load custom categories from localStorage
+    setCustomCats(getCustomCategories())
   }, [supabase, loadExpenses])
 
   const filtered = useMemo(() => expenses.filter(e => {
@@ -99,12 +128,12 @@ export default function ExpensesPage() {
   function openAdd() {
     setEditId(null); setTitle(''); setAmount(''); setDate(todayStr())
     setCategory(DEFAULT_CATEGORY); setPaidBy(userId ?? ''); setExpNote('')
-    setSplit('50/50'); setFormError(''); setShowForm(true)
+    setSplit('50/50'); setFormError(''); setShowCatInput(false); setNewCatLabel(''); setShowForm(true)
   }
   function openEdit(e: Expense) {
     setEditId(e.id); setTitle(e.title); setAmount(String(e.amount))
     setDate(e.date); setCategory(e.category); setPaidBy(e.paid_by)
-    setExpNote(e.note ?? ''); setSplit('50/50'); setFormError(''); setShowForm(true)
+    setExpNote(e.note ?? ''); setSplit('50/50'); setFormError(''); setShowCatInput(false); setNewCatLabel(''); setShowForm(true)
   }
 
   async function handleSave(ev: React.FormEvent) {
@@ -153,6 +182,21 @@ export default function ExpensesPage() {
     setNotes(prev => ({ ...prev, [expenseId]: (prev[expenseId] ?? []).filter(n => n.id !== noteId) }))
   }
 
+  function handleAddCustomCat() {
+    if (!newCatLabel.trim()) return
+    const cat = addCustomCategory(newCatLabel)
+    const updated = getCustomCategories()
+    setCustomCats(updated)
+    setCategory(cat.value)
+    setNewCatLabel(''); setShowCatInput(false)
+  }
+
+  function handleRemoveCustomCat(value: string) {
+    removeCustomCategory(value)
+    setCustomCats(getCustomCategories())
+    if (category === value) setCategory(DEFAULT_CATEGORY)
+  }
+
   if (loading) return (
     <div className="flex items-center justify-center h-64 text-gray-400 text-sm">Cargando…</div>
   )
@@ -175,10 +219,19 @@ export default function ExpensesPage() {
             <span className="font-semibold text-gray-700">${monthTotal.toFixed(2)}</span>
           </p>
         </div>
-        <button onClick={openAdd}
-          className="flex items-center gap-1.5 bg-blue-600 text-white text-sm font-bold px-4 py-2.5 rounded-2xl active:opacity-80 shadow-sm">
-          <Plus size={16} strokeWidth={2.5} /> Agregar
-        </button>
+        <div className="flex items-center gap-2">
+          {filtered.length > 0 && (
+            <button onClick={() => exportToCSV(filtered, members, filterMonth)}
+              className="flex items-center gap-1.5 border border-gray-200 text-gray-600 text-sm font-medium px-3 py-2.5 rounded-2xl active:bg-gray-50">
+              <Download size={14} strokeWidth={2} />
+              CSV
+            </button>
+          )}
+          <button onClick={openAdd}
+            className="flex items-center gap-1.5 bg-blue-600 text-white text-sm font-bold px-4 py-2.5 rounded-2xl active:opacity-80 shadow-sm">
+            <Plus size={16} strokeWidth={2.5} /> Agregar
+          </button>
+        </div>
       </div>
 
       {/* ── Filtros ─────────────────────────────────── */}
@@ -269,9 +322,9 @@ export default function ExpensesPage() {
                   Categoría —{' '}
                   <span className="text-blue-600 font-bold normal-case capitalize text-xs">{getCategoryLabel(category)}</span>
                 </label>
-                <div className="max-h-48 overflow-y-auto space-y-3 rounded-xl">
+                <div className="max-h-52 overflow-y-auto space-y-3 rounded-xl">
                   {CATEGORY_GROUPS.map(group => {
-                    const cats = CATEGORIES.filter(c => c.group === group)
+                    const cats    = CATEGORIES.filter(c => c.group === group)
                     const gColors = GROUP_COLORS[group] ?? {
                       tile: 'bg-gray-50 text-gray-600 border-gray-200',
                       selected: 'bg-gray-700 text-white border-gray-700',
@@ -297,6 +350,65 @@ export default function ExpensesPage() {
                       </div>
                     )
                   })}
+
+                  {/* Custom categories */}
+                  <div>
+                    <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 pl-0.5">Personalizado</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {customCats.map(cat => {
+                        const sel = category === cat.value
+                        return (
+                          <div key={cat.value} className="relative group">
+                            <button type="button"
+                              onClick={() => setCategory(cat.value)}
+                              className={`pl-2.5 pr-7 py-1.5 rounded-xl text-[11px] font-semibold border transition-all active:scale-95 ${
+                                sel ? CUSTOM_COLORS.selected : CUSTOM_COLORS.tile
+                              }`}
+                            >
+                              {cat.label}
+                            </button>
+                            <button type="button"
+                              onClick={() => handleRemoveCustomCat(cat.value)}
+                              className={`absolute right-1.5 top-1/2 -translate-y-1/2 rounded-full w-4 h-4 flex items-center justify-center ${
+                                sel ? 'text-white/70 hover:text-white' : 'text-gray-400 hover:text-red-500'
+                              }`}
+                            >
+                              <X size={9} strokeWidth={3} />
+                            </button>
+                          </div>
+                        )
+                      })}
+
+                      {/* Add new custom category */}
+                      {showCatInput ? (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            autoFocus
+                            type="text"
+                            placeholder="Nueva categoría"
+                            value={newCatLabel}
+                            onChange={e => setNewCatLabel(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddCustomCat() } }}
+                            className="border border-violet-300 rounded-xl px-2.5 py-1.5 text-[11px] font-medium focus:outline-none focus:ring-2 focus:ring-violet-400 w-32 bg-white"
+                          />
+                          <button type="button" onClick={handleAddCustomCat}
+                            className="bg-violet-600 text-white rounded-xl px-2.5 py-1.5 text-[11px] font-semibold active:opacity-80">
+                            OK
+                          </button>
+                          <button type="button" onClick={() => { setShowCatInput(false); setNewCatLabel('') }}
+                            className="text-gray-400 p-1">
+                            <X size={13} />
+                          </button>
+                        </div>
+                      ) : (
+                        <button type="button"
+                          onClick={() => setShowCatInput(true)}
+                          className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold border border-dashed border-violet-300 text-violet-600 bg-violet-50 active:bg-violet-100">
+                          + Nueva
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -414,7 +526,7 @@ export default function ExpensesPage() {
                       Pagó: <span className="font-semibold text-gray-600">{memberName(exp.paid_by)}</span>
                       {exp.paid_by === userId && <span className="text-gray-400"> (yo)</span>}
                     </p>
-                    {exp.note && <p className="text-[11px] text-blue-500 italic mt-0.5 truncate">"{exp.note}"</p>}
+                    {exp.note && <p className="text-[11px] text-blue-500 italic mt-0.5 truncate">&quot;{exp.note}&quot;</p>}
                   </div>
                 </div>
                 <div className="flex-shrink-0 text-right ml-1">

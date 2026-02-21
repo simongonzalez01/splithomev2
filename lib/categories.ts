@@ -55,8 +55,39 @@ export const DEFAULT_CATEGORY = 'Groceries'
 
 export const CATEGORY_GROUPS = [...new Set(CATEGORIES.map(c => c.group))]
 
-export function getCategoryLabel(value: string) {
-  return CATEGORIES.find(c => c.value === value)?.label ?? value
+// ─── Custom categories (localStorage) ────────────────────────────────────────
+const CUSTOM_KEY = 'splitHome_customCategories'
+
+export function getCustomCategories(): Category[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(CUSTOM_KEY)
+    return raw ? (JSON.parse(raw) as Category[]) : []
+  } catch {
+    return []
+  }
+}
+
+export function addCustomCategory(label: string): Category {
+  const cat: Category = { value: `custom_${Date.now()}`, label: label.trim(), group: 'Personalizado' }
+  const existing = getCustomCategories()
+  localStorage.setItem(CUSTOM_KEY, JSON.stringify([...existing, cat]))
+  return cat
+}
+
+export function removeCustomCategory(value: string): void {
+  const existing = getCustomCategories()
+  localStorage.setItem(CUSTOM_KEY, JSON.stringify(existing.filter(c => c.value !== value)))
+}
+
+export function getCategoryLabel(value: string): string {
+  const builtin = CATEGORIES.find(c => c.value === value)
+  if (builtin) return builtin.label
+  if (typeof window !== 'undefined') {
+    const found = getCustomCategories().find(c => c.value === value)
+    if (found) return found.label
+  }
+  return value
 }
 
 // Color map for category tiles in forms
@@ -70,6 +101,7 @@ export const GROUP_COLORS: Record<string, { tile: string; selected: string }> = 
   'Trabajo':       { tile: 'bg-purple-50 text-purple-700 border-purple-100', selected: 'bg-purple-600 text-white border-purple-600' },
   'Suscripciones': { tile: 'bg-indigo-50 text-indigo-700 border-indigo-100', selected: 'bg-indigo-600 text-white border-indigo-600' },
   'Otros':         { tile: 'bg-gray-50 text-gray-600 border-gray-200',   selected: 'bg-gray-700 text-white border-gray-700' },
+  'Personalizado': { tile: 'bg-violet-50 text-violet-700 border-violet-100', selected: 'bg-violet-600 text-white border-violet-600' },
 }
 
 // Presets for Fixed Expenses

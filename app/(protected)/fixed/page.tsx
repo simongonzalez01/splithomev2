@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import CategorySelect from '@/components/CategorySelect'
 import { DEFAULT_CATEGORY, FIXED_PRESETS } from '@/lib/categories'
-import { CalendarClock, Plus, X, Check, Pencil, Trash2 } from 'lucide-react'
+import { CalendarClock, Plus, X, Check, Pencil, Trash2, Bell } from 'lucide-react'
 
 type FixedExpense = {
   id: string; name: string; amount: number; category: string
@@ -20,30 +20,40 @@ function monthFirstOf(dateStr: string) {
 }
 function todayStr() { return new Date().toISOString().split('T')[0] }
 
+/** Returns how many days until the given due day this month (or next month) */
+function daysUntilDue(dueDay: number): number {
+  const today    = new Date()
+  const todayDay = today.getDate()
+  if (dueDay >= todayDay) return dueDay - todayDay
+  // Already passed → count days until that day next month
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()
+  return (daysInMonth - todayDay) + dueDay
+}
+
 export default function FixedPage() {
   const supabase = createClient()
-  const [userId, setUserId] = useState<string | null>(null)
-  const [familyId, setFamilyId] = useState<string | null>(null)
-  const [members, setMembers] = useState<{ user_id: string; display_name: string | null }[]>([])
+  const [userId,    setUserId]    = useState<string | null>(null)
+  const [familyId,  setFamilyId]  = useState<string | null>(null)
+  const [members,   setMembers]   = useState<{ user_id: string; display_name: string | null }[]>([])
   const [fixedList, setFixedList] = useState<FixedExpense[]>([])
-  const [paidIds, setPaidIds] = useState<Set<string>>(new Set())
-  const [loading, setLoading] = useState(true)
-  const [noFamily, setNoFamily] = useState(false)
+  const [paidIds,   setPaidIds]   = useState<Set<string>>(new Set())
+  const [loading,   setLoading]   = useState(true)
+  const [noFamily,  setNoFamily]  = useState(false)
 
   // Form state
-  const [showForm, setShowForm] = useState(false)
-  const [showPresets, setShowPresets] = useState(false)
-  const [editId, setEditId] = useState<string | null>(null)
-  const [name, setName] = useState('')
-  const [amount, setAmount] = useState('')
-  const [category, setCategory] = useState(DEFAULT_CATEGORY)
-  const [dueDay, setDueDay] = useState('1')
+  const [showForm,      setShowForm]      = useState(false)
+  const [showPresets,   setShowPresets]   = useState(false)
+  const [editId,        setEditId]        = useState<string | null>(null)
+  const [name,          setName]          = useState('')
+  const [amount,        setAmount]        = useState('')
+  const [category,      setCategory]      = useState(DEFAULT_CATEGORY)
+  const [dueDay,        setDueDay]        = useState('1')
   const [defaultPaidBy, setDefaultPaidBy] = useState('')
-  const [formError, setFormError] = useState('')
-  const [saving, setSaving] = useState(false)
+  const [formError,     setFormError]     = useState('')
+  const [saving,        setSaving]        = useState(false)
 
   // Confirmar pago con fecha
-  const [markingId, setMarkingId] = useState<string | null>(null)
+  const [markingId,   setMarkingId]   = useState<string | null>(null)
   const [pendingMark, setPendingMark] = useState<{ fixed: FixedExpense; date: string } | null>(null)
 
   const memberName = (uid: string | null) =>
@@ -111,8 +121,7 @@ export default function FixedPage() {
   }
 
   async function handleMarkPaid(f: FixedExpense, payDate: string) {
-    setMarkingId(f.id)
-    setPendingMark(null)
+    setMarkingId(f.id); setPendingMark(null)
     const month = monthFirstOf(payDate)
     const { data: exp, error: expErr } = await supabase.from('expenses')
       .insert({ family_id: familyId, title: f.name, amount: f.amount, date: payDate, category: f.category, paid_by: f.default_paid_by ?? userId })
@@ -142,8 +151,12 @@ export default function FixedPage() {
   const unpaid = active.filter(f => !paidIds.has(f.id))
   const paid   = active.filter(f => paidIds.has(f.id))
 
+  // Due-soon: unpaid fixed expenses due within 5 days
+  const soonDue = unpaid.filter(f => daysUntilDue(f.due_day) <= 5)
+
   return (
     <div className="max-w-lg mx-auto">
+
       {/* Header */}
       <div className="px-4 pt-5 pb-3 flex items-center justify-between">
         <div>
@@ -156,6 +169,26 @@ export default function FixedPage() {
           Agregar
         </button>
       </div>
+
+      {/* ── Due-soon reminder banner ──────────────────────────────────────── */}
+      {soonDue.length > 0 && (
+        <div className="px-4 mb-3">
+          <div className="bg-orange-50 border border-orange-100 rounded-2xl px-4 py-3 flex items-start gap-3">
+            <Bell size={16} className="text-orange-500 flex-shrink-0 mt-0.5" strokeWidth={2} />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-orange-800">
+                {soonDue.length === 1 ? 'Pago próximo a vencer' : `${soonDue.length} pagos próximos a vencer`}
+              </p>
+              <p className="text-xs text-orange-600 mt-0.5 leading-relaxed">
+                {soonDue.map(f => {
+                  const d = daysUntilDue(f.due_day)
+                  return d === 0 ? `${f.name} (hoy!)` : `${f.name} (${d}d)`
+                }).join(' · ')}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirmar pago con fecha */}
       {pendingMark && (
@@ -294,6 +327,7 @@ export default function FixedPage() {
                 {unpaid.map(f => (
                   <FixedCard key={f.id} fixed={f} paid={false} marking={markingId === f.id}
                     userId={userId!} memberName={memberName}
+                    daysUntil={daysUntilDue(f.due_day)}
                     onMarkPaid={() => setPendingMark({ fixed: f, date: todayStr() })}
                     onEdit={() => openEdit(f)}
                     onDelete={() => handleDelete(f.id)}
@@ -308,7 +342,8 @@ export default function FixedPage() {
                 </p>
                 {paid.map(f => (
                   <FixedCard key={f.id} fixed={f} paid userId={userId!} marking={false}
-                    memberName={memberName} onMarkPaid={() => {}} onEdit={() => openEdit(f)} onDelete={() => handleDelete(f.id)}
+                    memberName={memberName} daysUntil={null}
+                    onMarkPaid={() => {}} onEdit={() => openEdit(f)} onDelete={() => handleDelete(f.id)}
                   />
                 ))}
               </div>
@@ -320,22 +355,49 @@ export default function FixedPage() {
   )
 }
 
-function FixedCard({ fixed, paid, marking, userId, memberName, onMarkPaid, onEdit, onDelete }: {
+function FixedCard({ fixed, paid, marking, userId, memberName, daysUntil, onMarkPaid, onEdit, onDelete }: {
   fixed: FixedExpense; paid: boolean; marking: boolean; userId: string
   memberName: (uid: string | null) => string
+  daysUntil: number | null
   onMarkPaid: () => void; onEdit: () => void; onDelete: () => void
 }) {
+  const urgent = daysUntil !== null && daysUntil <= 2
+  const soon   = daysUntil !== null && daysUntil <= 5 && daysUntil > 2
+
   return (
-    <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${paid ? 'border-green-100 opacity-60' : 'border-gray-100'}`}>
+    <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${
+      paid    ? 'border-green-100 opacity-60'
+      : urgent ? 'border-orange-200'
+      : soon   ? 'border-amber-100'
+      :          'border-gray-100'
+    }`}>
       <div className="px-4 py-3 flex items-center gap-3">
-        <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${paid ? 'bg-green-50' : 'bg-orange-50'}`}>
+        <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
+          paid ? 'bg-green-50' : urgent ? 'bg-orange-50' : 'bg-orange-50'
+        }`}>
           {paid
             ? <Check size={18} className="text-green-500" strokeWidth={2.5} />
             : <CalendarClock size={18} className="text-orange-400" strokeWidth={2} />
           }
         </div>
         <div className="flex-1 min-w-0">
-          <p className={`font-semibold text-sm ${paid ? 'text-gray-400 line-through' : 'text-gray-900'}`}>{fixed.name}</p>
+          <div className="flex items-center gap-2">
+            <p className={`font-semibold text-sm ${paid ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+              {fixed.name}
+            </p>
+            {/* Due-soon badge */}
+            {!paid && daysUntil !== null && daysUntil <= 5 && (
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
+                daysUntil === 0
+                  ? 'bg-red-100 text-red-600'
+                  : daysUntil <= 2
+                    ? 'bg-orange-100 text-orange-700'
+                    : 'bg-amber-50 text-amber-700'
+              }`}>
+                {daysUntil === 0 ? 'Hoy' : `${daysUntil}d`}
+              </span>
+            )}
+          </div>
           <p className="text-xs text-gray-400">{fixed.category} · Día {fixed.due_day} · {memberName(fixed.default_paid_by)}</p>
         </div>
         <div className="flex-shrink-0 text-right">
