@@ -104,10 +104,6 @@ export default async function DashboardPage() {
           <h1 className="text-2xl font-bold text-gray-900">Hola, {firstName} 👋</h1>
           <p className="text-sm text-gray-400 mt-0.5 capitalize">{monthLabel}</p>
         </div>
-        <Link href="/expenses"
-          className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center shadow-md active:opacity-80">
-          <Plus size={20} className="text-white" strokeWidth={2.5} />
-        </Link>
       </div>
 
       {/* ── A) Balance Card ───────────────────────────── */}

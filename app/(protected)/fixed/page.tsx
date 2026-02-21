@@ -15,6 +15,9 @@ function monthFirst() {
   const d = new Date(); d.setDate(1)
   return d.toISOString().split('T')[0]
 }
+function monthFirstOf(dateStr: string) {
+  return dateStr.slice(0, 7) + '-01'
+}
 function todayStr() { return new Date().toISOString().split('T')[0] }
 
 export default function FixedPage() {
@@ -39,8 +42,9 @@ export default function FixedPage() {
   const [formError, setFormError] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // Marking as paid
+  // Confirmar pago con fecha
   const [markingId, setMarkingId] = useState<string | null>(null)
+  const [pendingMark, setPendingMark] = useState<{ fixed: FixedExpense; date: string } | null>(null)
 
   const memberName = (uid: string | null) =>
     members.find(m => m.user_id === uid)?.display_name || 'Miembro'
@@ -106,12 +110,12 @@ export default function FixedPage() {
     await loadData(familyId!)
   }
 
-  async function handleMarkPaid(f: FixedExpense) {
+  async function handleMarkPaid(f: FixedExpense, payDate: string) {
     setMarkingId(f.id)
-    const today = todayStr()
-    const month = monthFirst()
+    setPendingMark(null)
+    const month = monthFirstOf(payDate)
     const { data: exp, error: expErr } = await supabase.from('expenses')
-      .insert({ family_id: familyId, title: f.name, amount: f.amount, date: today, category: f.category, paid_by: f.default_paid_by ?? userId })
+      .insert({ family_id: familyId, title: f.name, amount: f.amount, date: payDate, category: f.category, paid_by: f.default_paid_by ?? userId })
       .select().single()
     if (expErr || !exp) { setMarkingId(null); return }
     await supabase.from('fixed_expense_payments')
@@ -152,6 +156,47 @@ export default function FixedPage() {
           Agregar
         </button>
       </div>
+
+      {/* Confirmar pago con fecha */}
+      {pendingMark && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end"
+          onClick={() => setPendingMark(null)}>
+          <div className="bg-white w-full rounded-t-3xl p-5 space-y-4"
+            onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto" />
+            <div>
+              <h2 className="text-base font-bold text-gray-900">Confirmar pago</h2>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {pendingMark.fixed.name} · ${Number(pendingMark.fixed.amount).toFixed(2)}
+              </p>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">
+                Fecha de pago
+              </label>
+              <input
+                type="date"
+                value={pendingMark.date}
+                onChange={e => setPendingMark(prev => prev ? { ...prev, date: e.target.value } : null)}
+                className="w-full border border-gray-200 bg-gray-50 rounded-xl px-3 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setPendingMark(null)}
+                className="flex-1 border border-gray-200 text-gray-600 font-semibold py-3.5 rounded-xl">
+                Cancelar
+              </button>
+              <button
+                onClick={() => handleMarkPaid(pendingMark.fixed, pendingMark.date)}
+                disabled={markingId === pendingMark.fixed.id}
+                className="flex-1 flex items-center justify-center gap-2 bg-green-600 disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl">
+                <Check size={16} strokeWidth={2.5} />
+                {markingId ? 'Registrando…' : 'Confirmar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Presets sheet */}
       {showPresets && (
@@ -249,7 +294,7 @@ export default function FixedPage() {
                 {unpaid.map(f => (
                   <FixedCard key={f.id} fixed={f} paid={false} marking={markingId === f.id}
                     userId={userId!} memberName={memberName}
-                    onMarkPaid={() => handleMarkPaid(f)}
+                    onMarkPaid={() => setPendingMark({ fixed: f, date: todayStr() })}
                     onEdit={() => openEdit(f)}
                     onDelete={() => handleDelete(f.id)}
                   />

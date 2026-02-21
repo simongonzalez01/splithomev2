@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import BottomNav from '@/components/BottomNav'
+import FAB from '@/components/FAB'
 import { Home } from 'lucide-react'
 
 export default async function ProtectedLayout({
@@ -33,6 +34,7 @@ export default async function ProtectedLayout({
       </main>
 
       <BottomNav />
+      <FAB />
     </div>
   )
 }
