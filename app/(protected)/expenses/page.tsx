@@ -47,6 +47,7 @@ export default function ExpensesPage() {
   const [expNote,   setExpNote]   = useState('')
   const [formError, setFormError] = useState('')
   const [saving,    setSaving]    = useState(false)
+  const [split,     setSplit]     = useState<'50/50' | 'personal'>('50/50')
 
   // Note panel
   const [openNotes,  setOpenNotes]  = useState<string | null>(null)
@@ -98,12 +99,12 @@ export default function ExpensesPage() {
   function openAdd() {
     setEditId(null); setTitle(''); setAmount(''); setDate(todayStr())
     setCategory(DEFAULT_CATEGORY); setPaidBy(userId ?? ''); setExpNote('')
-    setFormError(''); setShowForm(true)
+    setSplit('50/50'); setFormError(''); setShowForm(true)
   }
   function openEdit(e: Expense) {
     setEditId(e.id); setTitle(e.title); setAmount(String(e.amount))
     setDate(e.date); setCategory(e.category); setPaidBy(e.paid_by)
-    setExpNote(e.note ?? ''); setFormError(''); setShowForm(true)
+    setExpNote(e.note ?? ''); setSplit('50/50'); setFormError(''); setShowForm(true)
   }
 
   async function handleSave(ev: React.FormEvent) {
@@ -331,10 +332,32 @@ export default function ExpensesPage() {
                 </div>
               )}
 
-              {/* División (informacional) */}
-              <div className="flex items-center justify-between bg-green-50 border border-green-100 rounded-2xl px-4 py-3">
-                <span className="text-sm text-gray-600 font-medium">División</span>
-                <span className="text-sm font-bold text-green-600">50/50 partes iguales ✓</span>
+              {/* División — toggle */}
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">División</label>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setSplit('50/50')}
+                    className={`flex-1 py-3 rounded-2xl font-semibold text-sm border-2 transition-all active:scale-95 ${
+                      split === '50/50'
+                        ? 'border-green-500 bg-green-500 text-white shadow-sm'
+                        : 'border-gray-200 bg-white text-gray-600'
+                    }`}>
+                    50 / 50
+                  </button>
+                  <button type="button" onClick={() => setSplit('personal')}
+                    className={`flex-1 py-3 rounded-2xl font-semibold text-sm border-2 transition-all active:scale-95 ${
+                      split === 'personal'
+                        ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
+                        : 'border-gray-200 bg-white text-gray-600'
+                    }`}>
+                    Solo uno
+                  </button>
+                </div>
+                <p className="text-[11px] text-gray-400 mt-1.5 text-center">
+                  {split === '50/50'
+                    ? 'Cada uno paga la mitad del gasto'
+                    : 'El que pagó asume el gasto completo'}
+                </p>
               </div>
 
               {/* Nota */}

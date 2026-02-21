@@ -303,16 +303,12 @@ function FixedCard({ fixed, paid, marking, userId, memberName, onMarkPaid, onEdi
             className="flex-1 flex items-center justify-center gap-1.5 bg-green-600 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-xl active:opacity-80">
             {marking ? 'Registrando…' : <><Check size={14} strokeWidth={3} /> Marcar pagado</>}
           </button>
-          {fixed.created_by === userId && (
-            <>
-              <button onClick={onEdit} className="text-gray-400 active:text-blue-500 p-2">
-                <Pencil size={15} />
-              </button>
-              <button onClick={onDelete} className="text-gray-400 active:text-red-400 p-2">
-                <Trash2 size={15} />
-              </button>
-            </>
-          )}
+          <button onClick={onEdit} className="text-gray-400 active:text-blue-500 p-2">
+            <Pencil size={15} />
+          </button>
+          <button onClick={onDelete} className="text-gray-400 active:text-red-400 p-2">
+            <Trash2 size={15} />
+          </button>
         </div>
       )}
     </div>
