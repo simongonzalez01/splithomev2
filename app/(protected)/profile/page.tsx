@@ -25,10 +25,12 @@ export default function ProfilePage() {
   const [familyId, setFamilyId] = useState<string | null>(null)
   const [familyName, setFamilyName] = useState('')
   const [familyCode, setFamilyCode] = useState('')
-  const [members, setMembers] = useState<Member[]>([])
-  const [settlements, setSettlements] = useState<Settlement[]>([])
-  const [loading, setLoading] = useState(true)
-  const [copied, setCopied] = useState(false)
+  const [members,        setMembers]        = useState<Member[]>([])
+  const [settlements,    setSettlements]    = useState<Settlement[]>([])
+  const [loading,        setLoading]        = useState(true)
+  const [copied,         setCopied]         = useState(false)
+  const [isCreator,      setIsCreator]      = useState(false)
+  const [removingMember, setRemovingMember] = useState<string | null>(null)
 
   // Settlement form
   const [showSettle, setShowSettle] = useState(false)
@@ -51,8 +53,9 @@ export default function ProfilePage() {
       setDisplayName(profile?.display_name ?? '')
       if (profile?.family_id) {
         setFamilyId(profile.family_id)
-        const { data: fam } = await supabase.from('families').select('name, code').eq('id', profile.family_id).single()
+        const { data: fam } = await supabase.from('families').select('name, code, created_by').eq('id', profile.family_id).single()
         setFamilyName(fam?.name ?? ''); setFamilyCode(fam?.code ?? '')
+        setIsCreator(fam?.created_by === user.id)
         const { data: mems } = await supabase.from('profiles').select('user_id, display_name').eq('family_id', profile.family_id)
         setMembers(mems ?? [])
         const other = (mems ?? []).find(m => m.user_id !== user.id)
@@ -98,6 +101,14 @@ export default function ProfilePage() {
   async function deleteSettlement(id: string) {
     await supabase.from('settlements').delete().eq('id', id)
     setSettlements(prev => prev.filter(s => s.id !== id))
+  }
+
+  async function handleRemoveMember(memberId: string, memberName: string) {
+    if (!confirm(`¿Eliminar a ${memberName} de la familia? Perderá acceso a los gastos compartidos.`)) return
+    setRemovingMember(memberId)
+    await supabase.from('profiles').update({ family_id: null }).eq('user_id', memberId)
+    setMembers(prev => prev.filter(m => m.user_id !== memberId))
+    setRemovingMember(null)
   }
 
   if (loading) return <div className="flex items-center justify-center h-64 text-gray-400 text-sm">Cargando…</div>
@@ -147,17 +158,36 @@ export default function ProfilePage() {
           <div>
             <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Miembros ({members.length})</p>
             <div className="space-y-2">
-              {members.map(m => (
-                <div key={m.user_id} className="flex items-center gap-3 py-1">
-                  <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-sm font-bold text-gray-600">
-                    {(m.display_name ?? '?')[0].toUpperCase()}
+              {members.map(m => {
+                const isSelf    = m.user_id === userId
+                const canRemove = isCreator && !isSelf
+                const name      = m.display_name || 'Sin nombre'
+                return (
+                  <div key={m.user_id} className="flex items-center gap-3 py-1">
+                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-sm font-bold text-gray-600 flex-shrink-0">
+                      {(m.display_name ?? '?')[0].toUpperCase()}
+                    </div>
+                    <p className="text-sm font-medium text-gray-800 flex-1">
+                      {name}
+                      {isSelf && <span className="ml-1 text-xs text-blue-400">(tú)</span>}
+                      {isCreator && isSelf && <span className="ml-1 text-xs text-amber-500">· Admin</span>}
+                    </p>
+                    {canRemove && (
+                      <button
+                        onClick={() => handleRemoveMember(m.user_id, name)}
+                        disabled={removingMember === m.user_id}
+                        className="text-gray-300 active:text-red-500 disabled:opacity-50 p-1 flex-shrink-0"
+                        title={`Eliminar a ${name}`}
+                      >
+                        {removingMember === m.user_id
+                          ? <span className="text-[10px] text-gray-400">…</span>
+                          : <X size={15} strokeWidth={2} />
+                        }
+                      </button>
+                    )}
                   </div>
-                  <p className="text-sm font-medium text-gray-800">
-                    {m.display_name || 'Sin nombre'}
-                    {m.user_id === userId && <span className="ml-1 text-xs text-blue-400">(tú)</span>}
-                  </p>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         </section>
