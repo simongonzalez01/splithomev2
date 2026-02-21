@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "Bash(echo:*)",
+      "Bash(node scripts/generate-icons.mjs:*)"
+    ]
+  }
+}
