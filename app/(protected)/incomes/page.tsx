@@ -372,7 +372,7 @@ export default function IncomesPage() {
                     <span className={`text-[10px] leading-tight ${split === val ? 'opacity-75' : 'text-gray-400'}`}>{resolvedDesc}</span>
                   </button>
                   )
-                })
+                })}
               </div>
             </div>
 
