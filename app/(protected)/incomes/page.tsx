@@ -353,7 +353,13 @@ export default function IncomesPage() {
                   { val: '50/50',     label: '50/50',       desc: 'Para todos por igual', color: 'blue'   },
                   { val: 'personal',  label: 'Solo para mí', desc: 'Solo el receptor',     color: 'purple' },
                   { val: 'para_otro', label: 'Para el otro', desc: 'Lo recibí por ti',    color: 'orange' },
-                ] as const).map(({ val, label, desc, color }) => (
+                ] as const).map(({ val, label, desc, color }) => {
+                  const otherName = members.find(m => m.user_id !== receivedBy)?.display_name ?? 'el otro'
+                  const resolvedDesc =
+                    val === 'para_otro' ? `Lo recibí, es de ${otherName}` :
+                    val === 'personal'  ? 'Solo mío, no afecta deudas' :
+                    desc
+                  return (
                   <button key={val} onClick={() => setSplit(val)}
                     className={`flex flex-col items-center gap-1 p-3 rounded-xl border text-center transition-all ${
                       split === val
@@ -363,9 +369,10 @@ export default function IncomesPage() {
                         : 'bg-gray-50 text-gray-600 border-gray-100'
                     }`}>
                     <span className="text-xs font-bold">{label}</span>
-                    <span className={`text-[10px] leading-tight ${split === val ? 'opacity-75' : 'text-gray-400'}`}>{desc}</span>
+                    <span className={`text-[10px] leading-tight ${split === val ? 'opacity-75' : 'text-gray-400'}`}>{resolvedDesc}</span>
                   </button>
-                ))}
+                  )
+                })
               </div>
             </div>
 

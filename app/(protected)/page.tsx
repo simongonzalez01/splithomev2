@@ -79,21 +79,30 @@ export default async function DashboardPage() {
   for (const m of memberList) {
     balance[m.user_id] = (paidMap[m.user_id] ?? 0) - equalShare
   }
-  // Sumar ingresos al balance según split_mode
+  // Ajustar balance por ingresos
+  // Lógica: quien RECIBIÓ el dinero lo tiene físicamente.
+  // Si es 50/50, le debe al resto su parte → su balance BAJA, el del resto SUBE.
+  // Si es personal, es solo suyo → no afecta el balance compartido.
+  // Si es para_otro, lo tiene quien recibió pero le pertenece al otro → receptor BAJA, otro SUBE.
   for (const inc of incomeList) {
     const amt = Number(inc.amount)
     if (inc.split_mode === '50/50') {
-      // Cada miembro recibe su parte proporcional
       const share = amt / memberCount
       for (const m of memberList) {
-        balance[m.user_id] = (balance[m.user_id] ?? 0) + share
+        if (m.user_id === inc.received_by) {
+          // Tiene el dinero de todos → debe devolver las partes ajenas
+          balance[m.user_id] = (balance[m.user_id] ?? 0) - (amt - share)
+        } else {
+          // Le corresponde su parte → se la deben
+          balance[m.user_id] = (balance[m.user_id] ?? 0) + share
+        }
       }
     } else if (inc.split_mode === 'personal') {
-      // Solo el que recibió
-      balance[inc.received_by] = (balance[inc.received_by] ?? 0) + amt
+      // Ingreso solo para quien lo recibió, no afecta deudas compartidas
     } else if (inc.split_mode === 'para_otro' && inc.for_member) {
-      // Lo recibió uno, pero le corresponde a otro
-      balance[inc.for_member] = (balance[inc.for_member] ?? 0) + amt
+      // Receptor tiene dinero ajeno → le debe al otro el total
+      balance[inc.received_by] = (balance[inc.received_by] ?? 0) - amt
+      balance[inc.for_member]  = (balance[inc.for_member]  ?? 0) + amt
     }
   }
   for (const s of settlList) {
