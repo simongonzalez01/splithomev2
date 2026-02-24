@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
-import { ArrowRight, Receipt, CalendarClock, ShoppingCart, Plus } from 'lucide-react'
+import { ArrowRight, Receipt, CalendarClock, ShoppingCart, Plus, TrendingUp } from 'lucide-react'
 import { getCategoryLabel } from '@/lib/categories'
 
 // ── helpers ────────────────────────────────────────────────
@@ -37,6 +37,7 @@ export default async function DashboardPage() {
     { data: fixedExpenses },
     { data: fixedPayments },
     { data: shopItems },
+    { data: incomes },
   ] = await Promise.all([
     supabase.from('profiles').select('user_id, display_name').eq('family_id', familyId),
     supabase.from('expenses')
@@ -51,17 +52,22 @@ export default async function DashboardPage() {
       .eq('family_id', familyId).eq('month', first),
     supabase.from('shopping_items').select('id')
       .eq('family_id', familyId).eq('bought', false),
+    supabase.from('incomes')
+      .select('id, title, amount, date, received_by, split_mode, for_member')
+      .eq('family_id', familyId).gte('date', first).lte('date', last),
   ])
 
   const memberList   = members ?? []
   const expenseList  = expenses ?? []
   const settlList    = settlements ?? []
   const fixedList    = fixedExpenses ?? []
+  const incomeList   = incomes ?? []
   const paidFixedIds = new Set((fixedPayments ?? []).map(p => p.fixed_expense_id))
   const shopCount    = (shopItems ?? []).length
 
-  // ── Balance (unchanged logic) ──────────────────────────
+  // ── Balance ────────────────────────────────────────────
   const totalSpent  = expenseList.reduce((s, e) => s + Number(e.amount), 0)
+  const totalIncome = incomeList.reduce((s, i) => s + Number(i.amount), 0)
   const memberCount = memberList.length || 1
   const equalShare  = totalSpent / memberCount
 
@@ -72,6 +78,23 @@ export default async function DashboardPage() {
   const balance: Record<string, number> = {}
   for (const m of memberList) {
     balance[m.user_id] = (paidMap[m.user_id] ?? 0) - equalShare
+  }
+  // Sumar ingresos al balance según split_mode
+  for (const inc of incomeList) {
+    const amt = Number(inc.amount)
+    if (inc.split_mode === '50/50') {
+      // Cada miembro recibe su parte proporcional
+      const share = amt / memberCount
+      for (const m of memberList) {
+        balance[m.user_id] = (balance[m.user_id] ?? 0) + share
+      }
+    } else if (inc.split_mode === 'personal') {
+      // Solo el que recibió
+      balance[inc.received_by] = (balance[inc.received_by] ?? 0) + amt
+    } else if (inc.split_mode === 'para_otro' && inc.for_member) {
+      // Lo recibió uno, pero le corresponde a otro
+      balance[inc.for_member] = (balance[inc.for_member] ?? 0) + amt
+    }
   }
   for (const s of settlList) {
     balance[s.from_user] = (balance[s.from_user] ?? 0) + Number(s.amount)
@@ -154,16 +177,17 @@ export default async function DashboardPage() {
       </section>
 
       {/* ── B) Mini stats ─────────────────────────────── */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         {[
-          { label: 'Gastado',  value: `$${totalSpent < 1000 ? totalSpent.toFixed(0) : (totalSpent/1000).toFixed(1)+'k'}`, sub: 'este mes', Icon: Receipt, href: '/expenses' },
-          { label: 'Fijos',    value: String(unpaidFixed.length), sub: 'por pagar',    Icon: CalendarClock, href: '/fixed'    },
-          { label: 'Lista',    value: String(shopCount),          sub: 'pendientes',   Icon: ShoppingCart,  href: '/shopping' },
-        ].map(({ label, value, sub, Icon, href }) => (
+          { label: 'Gastado',   value: `$${totalSpent < 1000 ? totalSpent.toFixed(0) : (totalSpent/1000).toFixed(1)+'k'}`,   sub: 'este mes',   Icon: Receipt,      href: '/expenses', color: 'text-blue-500'    },
+          { label: 'Ingresos',  value: `$${totalIncome < 1000 ? totalIncome.toFixed(0) : (totalIncome/1000).toFixed(1)+'k'}`, sub: 'este mes',   Icon: TrendingUp,   href: '/incomes',  color: 'text-emerald-500' },
+          { label: 'Fijos',     value: String(unpaidFixed.length), sub: 'por pagar',    Icon: CalendarClock, href: '/fixed',    color: 'text-blue-500'    },
+          { label: 'Lista',     value: String(shopCount),          sub: 'pendientes',   Icon: ShoppingCart,  href: '/shopping', color: 'text-blue-500'    },
+        ].map(({ label, value, sub, Icon, href, color }) => (
           <Link key={label} href={href}
             className="bg-white rounded-2xl p-3 border border-gray-100 shadow-sm flex flex-col items-center text-center active:opacity-80">
-            <Icon size={15} className="text-blue-500 mb-1.5" strokeWidth={1.8} />
-            <p className="text-[18px] font-black text-gray-900 leading-none">{value}</p>
+            <Icon size={15} className={`${color} mb-1.5`} strokeWidth={1.8} />
+            <p className="text-[16px] font-black text-gray-900 leading-none">{value}</p>
             <p className="text-[9px] text-gray-400 mt-1 font-semibold leading-tight uppercase tracking-wide">{label}</p>
             <p className="text-[9px] text-gray-300 leading-tight">{sub}</p>
           </Link>

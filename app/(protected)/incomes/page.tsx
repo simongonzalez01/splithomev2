@@ -1,0 +1,415 @@
+'use client'
+
+import { useEffect, useState, useCallback } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import {
+  Plus, X, Pencil, Trash2, TrendingUp, Search,
+} from 'lucide-react'
+
+// ── Categorías de ingresos ────────────────────────────────────────────────────
+const INCOME_CATEGORIES = [
+  { value: 'Sale',        label: 'Venta',            emoji: '🚗' },
+  { value: 'Salary',      label: 'Salario / Sueldo', emoji: '💼' },
+  { value: 'Bonus',       label: 'Bono / Extra',     emoji: '🎁' },
+  { value: 'Refund',      label: 'Reembolso',        emoji: '↩️' },
+  { value: 'Gift',        label: 'Regalo / Donación', emoji: '🎀' },
+  { value: 'Rent',        label: 'Alquiler cobrado', emoji: '🏠' },
+  { value: 'Freelance',   label: 'Freelance',        emoji: '💻' },
+  { value: 'Investment',  label: 'Inversión',        emoji: '📈' },
+  { value: 'Tax Refund',  label: 'Devolución impuestos', emoji: '🏛️' },
+  { value: 'Other',       label: 'Otro ingreso',     emoji: '💰' },
+]
+
+function getCatLabel(val: string) {
+  return INCOME_CATEGORIES.find(c => c.value === val)?.label ?? val
+}
+function getCatEmoji(val: string) {
+  return INCOME_CATEGORIES.find(c => c.value === val)?.emoji ?? '💰'
+}
+
+type Income = {
+  id: string
+  title: string
+  amount: number
+  date: string
+  category: string
+  received_by: string
+  note: string | null
+  split_mode: string
+  for_member: string | null
+  created_at: string
+}
+type Member = { user_id: string; display_name: string | null }
+
+function todayStr() { return new Date().toISOString().split('T')[0] }
+function monthStart() {
+  const d = new Date(); d.setDate(1)
+  return d.toISOString().split('T')[0].slice(0, 7)
+}
+function fmtDate(s: string) {
+  return new Date(s + 'T12:00:00').toLocaleDateString('es', {
+    weekday: 'short', day: 'numeric', month: 'short',
+  })
+}
+
+export default function IncomesPage() {
+  const supabase = createClient()
+  const [userId,   setUserId]   = useState<string | null>(null)
+  const [familyId, setFamilyId] = useState<string | null>(null)
+  const [members,  setMembers]  = useState<Member[]>([])
+  const [incomes,  setIncomes]  = useState<Income[]>([])
+  const [loading,  setLoading]  = useState(true)
+  const [noFamily, setNoFamily] = useState(false)
+
+  const [search,      setSearch]      = useState('')
+  const [filterMonth, setFilterMonth] = useState(monthStart())
+
+  // Form
+  const [showForm,  setShowForm]  = useState(false)
+  const [editId,    setEditId]    = useState<string | null>(null)
+  const [title,     setTitle]     = useState('')
+  const [amount,    setAmount]    = useState('')
+  const [date,      setDate]      = useState(todayStr())
+  const [category,  setCategory]  = useState('Sale')
+  const [receivedBy, setReceivedBy] = useState('')
+  const [forMember,  setForMember]  = useState('')
+  const [incomeNote, setIncomeNote] = useState('')
+  const [split,     setSplit]     = useState<'50/50' | 'personal' | 'para_otro'>('50/50')
+  const [formError, setFormError] = useState('')
+  const [saving,    setSaving]    = useState(false)
+
+  const memberName = (uid: string) =>
+    members.find(m => m.user_id === uid)?.display_name || uid.slice(0, 8)
+
+  const loadIncomes = useCallback(async (fid: string) => {
+    const { data } = await supabase
+      .from('incomes').select('*').eq('family_id', fid)
+      .order('date', { ascending: false }).order('created_at', { ascending: false })
+    setIncomes(data ?? [])
+  }, [supabase])
+
+  useEffect(() => {
+    ;(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      setUserId(user.id)
+      const { data: profile } = await supabase
+        .from('profiles').select('family_id').eq('user_id', user.id).single()
+      if (!profile?.family_id) { setNoFamily(true); setLoading(false); return }
+      const fid = profile.family_id
+      setFamilyId(fid)
+      setReceivedBy(user.id)
+      const { data: mems } = await supabase
+        .from('profiles').select('user_id, display_name').eq('family_id', fid)
+      setMembers(mems ?? [])
+      await loadIncomes(fid)
+      setLoading(false)
+    })()
+  }, [supabase, loadIncomes])
+
+  function openAdd() {
+    setEditId(null)
+    setTitle(''); setAmount(''); setDate(todayStr())
+    setCategory('Sale'); setReceivedBy(userId ?? '')
+    setForMember(''); setIncomeNote(''); setSplit('50/50')
+    setFormError('')
+    setShowForm(true)
+  }
+
+  function openEdit(inc: Income) {
+    setEditId(inc.id)
+    setTitle(inc.title)
+    setAmount(String(inc.amount))
+    setDate(inc.date)
+    setCategory(inc.category)
+    setReceivedBy(inc.received_by)
+    setForMember(inc.for_member ?? '')
+    setIncomeNote(inc.note ?? '')
+    setSplit((inc.split_mode as 'personal' | '50/50' | 'para_otro') ?? '50/50')
+    setFormError('')
+    setShowForm(true)
+  }
+
+  async function saveIncome() {
+    if (!title.trim()) { setFormError('Escribe una descripción'); return }
+    const amt = parseFloat(amount)
+    if (!amount || isNaN(amt) || amt <= 0) { setFormError('Monto inválido'); return }
+    if (!receivedBy) { setFormError('Selecciona quién lo recibió'); return }
+    if (split === 'para_otro' && !forMember) { setFormError('Selecciona para quién es'); return }
+    setSaving(true)
+    const payload = {
+      family_id: familyId,
+      title: title.trim(),
+      amount: amt,
+      date,
+      category,
+      received_by: receivedBy,
+      note: incomeNote.trim() || null,
+      split_mode: split,
+      for_member: split === 'para_otro' ? forMember : null,
+      updated_at: new Date().toISOString(),
+    }
+    if (editId) {
+      await supabase.from('incomes').update(payload).eq('id', editId)
+    } else {
+      await supabase.from('incomes').insert(payload)
+    }
+    await loadIncomes(familyId!)
+    setShowForm(false)
+    setSaving(false)
+  }
+
+  async function deleteIncome(id: string) {
+    if (!confirm('¿Eliminar este ingreso?')) return
+    await supabase.from('incomes').delete().eq('id', id)
+    setIncomes(prev => prev.filter(i => i.id !== id))
+  }
+
+  // Filters
+  const filtered = incomes.filter(i => {
+    const matchMonth = i.date.startsWith(filterMonth)
+    const matchSearch = !search ||
+      i.title.toLowerCase().includes(search.toLowerCase()) ||
+      getCatLabel(i.category).toLowerCase().includes(search.toLowerCase())
+    return matchMonth && matchSearch
+  })
+
+  const totalMonth = filtered.reduce((s, i) => s + Number(i.amount), 0)
+
+  if (loading) return <div className="flex items-center justify-center h-64 text-gray-400">Cargando…</div>
+  if (noFamily) return <div className="p-6 text-center text-gray-500">No tienes familia. <a href="/family" className="text-blue-500 underline">Crear o unirse</a></div>
+
+  return (
+    <div className="px-4 pt-5 pb-28 max-w-lg mx-auto space-y-4">
+
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Ingresos</h1>
+          <p className="text-sm text-gray-400 mt-0.5">Dinero que entra a la familia</p>
+        </div>
+        <button onClick={openAdd}
+          className="flex items-center gap-1.5 bg-emerald-500 text-white px-4 py-2 rounded-xl font-semibold text-sm shadow-sm active:opacity-80">
+          <Plus size={15} strokeWidth={2.5} /> Agregar
+        </button>
+      </div>
+
+      {/* Resumen del mes */}
+      <section className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-2xl p-5 text-white shadow-md">
+        <p className="text-[11px] font-bold uppercase tracking-widest opacity-60 mb-1">Total ingresado</p>
+        <p className="text-4xl font-black tracking-tight">${totalMonth.toFixed(2)}</p>
+        <p className="text-xs opacity-60 mt-1">{filtered.length} ingreso{filtered.length !== 1 ? 's' : ''} este mes</p>
+      </section>
+
+      {/* Filtros */}
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="Buscar…"
+            className="w-full pl-8 pr-3 py-2 text-sm bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-400" />
+        </div>
+        <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)}
+          className="text-sm bg-white border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-400" />
+      </div>
+
+      {/* Lista */}
+      {filtered.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 text-center">
+          <TrendingUp size={32} className="text-gray-200 mx-auto mb-3" />
+          <p className="text-gray-400 text-sm">Sin ingresos este mes.</p>
+          <button onClick={openAdd} className="mt-3 text-emerald-500 text-sm font-semibold">
+            + Registrar ingreso
+          </button>
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm divide-y divide-gray-50 overflow-hidden">
+          {filtered.map(inc => {
+            const splitLabel =
+              inc.split_mode === 'personal' ? 'Solo para mí' :
+              inc.split_mode === 'para_otro' ? `Para ${memberName(inc.for_member ?? '')}` :
+              '50/50'
+            return (
+              <div key={inc.id} className="flex items-center gap-3 px-4 py-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-lg flex-shrink-0">
+                  {getCatEmoji(inc.category)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate leading-tight">{inc.title}</p>
+                  <p className="text-xs text-gray-400 mt-0.5 truncate">
+                    {fmtDate(inc.date)} · {getCatLabel(inc.category)} · {memberName(inc.received_by)}
+                  </p>
+                  <span className={`inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                    inc.split_mode === '50/50'     ? 'bg-blue-50 text-blue-600' :
+                    inc.split_mode === 'personal'  ? 'bg-purple-50 text-purple-600' :
+                    'bg-orange-50 text-orange-600'
+                  }`}>
+                    {splitLabel}
+                  </span>
+                </div>
+                <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                  <p className="text-sm font-bold text-emerald-600">+${Number(inc.amount).toFixed(2)}</p>
+                  <div className="flex gap-1.5">
+                    <button onClick={() => openEdit(inc)}
+                      className="text-gray-300 hover:text-gray-500 p-1">
+                      <Pencil size={13} />
+                    </button>
+                    <button onClick={() => deleteIncome(inc.id)}
+                      className="text-gray-300 hover:text-red-400 p-1">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* ── Modal / Form ─────────────────────────────────────────────────── */}
+      {showForm && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40"
+          onClick={e => { if (e.target === e.currentTarget) setShowForm(false) }}>
+          <div className="w-full max-w-lg bg-white rounded-t-3xl p-5 pb-8 space-y-4 max-h-[90vh] overflow-y-auto">
+
+            {/* Title bar */}
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-900">
+                {editId ? 'Editar ingreso' : 'Nuevo ingreso'}
+              </h2>
+              <button onClick={() => setShowForm(false)}
+                className="text-gray-400 hover:text-gray-600 p-1">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Descripción */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Descripción</label>
+              <input value={title} onChange={e => setTitle(e.target.value)}
+                placeholder="Ej: Venta del carro"
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400" />
+            </div>
+
+            {/* Monto + Fecha */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Monto ($)</label>
+                <input type="number" inputMode="decimal" value={amount}
+                  onChange={e => setAmount(e.target.value)}
+                  placeholder="0.00" min="0" step="0.01"
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Fecha</label>
+                <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400" />
+              </div>
+            </div>
+
+            {/* Categoría */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-2">Categoría</label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {INCOME_CATEGORIES.map(cat => (
+                  <button key={cat.value}
+                    onClick={() => setCategory(cat.value)}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-xl border text-xs font-semibold transition-all ${
+                      category === cat.value
+                        ? 'bg-emerald-500 text-white border-emerald-500'
+                        : 'bg-gray-50 text-gray-600 border-gray-100 active:bg-gray-100'
+                    }`}>
+                    <span className="text-lg leading-none">{cat.emoji}</span>
+                    <span className="leading-tight text-center">{cat.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Quién lo recibió */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">¿Quién lo recibió?</label>
+              <div className="flex gap-2">
+                {members.map(m => (
+                  <button key={m.user_id}
+                    onClick={() => setReceivedBy(m.user_id)}
+                    className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all ${
+                      receivedBy === m.user_id
+                        ? 'bg-emerald-500 text-white border-emerald-500'
+                        : 'bg-gray-50 text-gray-600 border-gray-100'
+                    }`}>
+                    {m.display_name ?? 'Miembro'}
+                    {m.user_id === userId && <span className="text-[10px] ml-1 opacity-70">(yo)</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Split mode */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-2">¿Cómo se divide?</label>
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { val: '50/50',     label: '50/50',       desc: 'Para todos por igual', color: 'blue'   },
+                  { val: 'personal',  label: 'Solo para mí', desc: 'Solo el receptor',     color: 'purple' },
+                  { val: 'para_otro', label: 'Para el otro', desc: 'Lo recibí por ti',    color: 'orange' },
+                ] as const).map(({ val, label, desc, color }) => (
+                  <button key={val} onClick={() => setSplit(val)}
+                    className={`flex flex-col items-center gap-1 p-3 rounded-xl border text-center transition-all ${
+                      split === val
+                        ? color === 'blue'   ? 'bg-blue-500 text-white border-blue-500' :
+                          color === 'purple' ? 'bg-purple-500 text-white border-purple-500' :
+                          'bg-orange-500 text-white border-orange-500'
+                        : 'bg-gray-50 text-gray-600 border-gray-100'
+                    }`}>
+                    <span className="text-xs font-bold">{label}</span>
+                    <span className={`text-[10px] leading-tight ${split === val ? 'opacity-75' : 'text-gray-400'}`}>{desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Para quién (solo si es para_otro) */}
+            {split === 'para_otro' && (
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">
+                  ¿Para quién es el ingreso?
+                </label>
+                <div className="flex gap-2">
+                  {members.filter(m => m.user_id !== receivedBy).map(m => (
+                    <button key={m.user_id}
+                      onClick={() => setForMember(m.user_id)}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all ${
+                        forMember === m.user_id
+                          ? 'bg-orange-500 text-white border-orange-500'
+                          : 'bg-gray-50 text-gray-600 border-gray-100'
+                      }`}>
+                      {m.display_name ?? 'Miembro'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Nota */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Nota (opcional)</label>
+              <textarea value={incomeNote} onChange={e => setIncomeNote(e.target.value)}
+                rows={2} placeholder="Detalles adicionales…"
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-emerald-400" />
+            </div>
+
+            {formError && (
+              <p className="text-red-500 text-xs font-semibold">{formError}</p>
+            )}
+
+            <button onClick={saveIncome} disabled={saving}
+              className="w-full bg-emerald-500 text-white py-3 rounded-xl font-bold text-sm shadow-sm disabled:opacity-60 active:opacity-80">
+              {saving ? 'Guardando…' : editId ? 'Guardar cambios' : 'Registrar ingreso'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
