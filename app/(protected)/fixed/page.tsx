@@ -1,10 +1,13 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import CategorySelect from '@/components/CategorySelect'
 import { DEFAULT_CATEGORY, FIXED_PRESETS } from '@/lib/categories'
-import { CalendarClock, Plus, X, Check, Pencil, Trash2, Bell, RefreshCw, Zap } from 'lucide-react'
+import {
+  CalendarClock, Plus, X, Check, Pencil, Trash2, Bell,
+  RefreshCw, Zap, Camera, ImageIcon,
+} from 'lucide-react'
 
 type FixedExpense = {
   id: string; name: string; amount: number; category: string
@@ -20,9 +23,6 @@ function monthFirstOf(dateStr: string) {
   return dateStr.slice(0, 7) + '-01'
 }
 function todayStr() { return new Date().toISOString().split('T')[0] }
-function fmtShort(dateStr: string) {
-  return new Date(dateStr + 'T12:00:00').toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' })
-}
 
 function daysUntilDue(dueDay: number): number {
   const today    = new Date()
@@ -42,7 +42,7 @@ export default function FixedPage() {
   const [loading,   setLoading]   = useState(true)
   const [noFamily,  setNoFamily]  = useState(false)
 
-  // Form state
+  // Add/Edit form state
   const [showForm,      setShowForm]      = useState(false)
   const [showPresets,   setShowPresets]   = useState(false)
   const [editId,        setEditId]        = useState<string | null>(null)
@@ -57,9 +57,15 @@ export default function FixedPage() {
   const [formError,     setFormError]     = useState('')
   const [saving,        setSaving]        = useState(false)
 
-  // Confirmar pago con fecha
+  // Mark-paid confirmation state
   const [markingId,   setMarkingId]   = useState<string | null>(null)
   const [pendingMark, setPendingMark] = useState<{ fixed: FixedExpense; date: string } | null>(null)
+
+  // Mark-paid receipt state
+  const payReceiptInputRef                         = useRef<HTMLInputElement>(null)
+  const [payReceiptFile,    setPayReceiptFile]    = useState<File | null>(null)
+  const [payReceiptPreview, setPayReceiptPreview] = useState<string | null>(null)
+  const [viewingReceipt,    setViewingReceipt]    = useState<string | null>(null)
 
   const memberName = (uid: string | null) =>
     members.find(m => m.user_id === uid)?.display_name || 'Miembro'
@@ -90,6 +96,7 @@ export default function FixedPage() {
     init()
   }, [supabase, loadData])
 
+  // ── Add/Edit form helpers ─────────────────────────────────────────────────
   function openAdd(preset?: typeof FIXED_PRESETS[0]) {
     setEditId(null)
     setName(preset?.name ?? ''); setAmount(preset?.amount ? String(preset.amount) : '')
@@ -134,18 +141,69 @@ export default function FixedPage() {
     await loadData(familyId!)
   }
 
+  // ── Receipt helpers (for mark-as-paid) ────────────────────────────────────
+  function triggerPayReceiptPick(mode: 'gallery' | 'camera') {
+    const inp = payReceiptInputRef.current
+    if (!inp) return
+    if (mode === 'camera') inp.setAttribute('capture', 'environment')
+    else                   inp.removeAttribute('capture')
+    inp.click()
+  }
+
+  function handlePayReceiptChange(ev: React.ChangeEvent<HTMLInputElement>) {
+    const file = ev.target.files?.[0]
+    if (!file) return
+    setPayReceiptFile(file)
+    setPayReceiptPreview(URL.createObjectURL(file))
+    ev.target.value = ''
+  }
+
+  function clearPayReceipt() {
+    if (payReceiptPreview) URL.revokeObjectURL(payReceiptPreview)
+    setPayReceiptFile(null)
+    setPayReceiptPreview(null)
+  }
+
+  function handleCancelMark() {
+    setPendingMark(null)
+    clearPayReceipt()
+  }
+
+  // ── Mark as paid ──────────────────────────────────────────────────────────
   async function handleMarkPaid(f: FixedExpense, payDate: string) {
-    setMarkingId(f.id); setPendingMark(null)
+    setMarkingId(f.id)
+    setPendingMark(null)
+
+    // Upload receipt if provided
+    let receipt_url: string | null = null
+    if (payReceiptFile && familyId) {
+      const ext  = payReceiptFile.name.split('.').pop() ?? 'jpg'
+      const path = `family/${familyId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+      const { error: upErr } = await supabase.storage.from('receipts').upload(path, payReceiptFile)
+      if (!upErr) receipt_url = path
+    }
+    clearPayReceipt()
+
     const month = monthFirstOf(payDate)
     const { data: exp, error: expErr } = await supabase.from('expenses')
-      .insert({ family_id: familyId, title: f.name, amount: f.amount, date: payDate, category: f.category, paid_by: f.default_paid_by ?? userId, split_mode: f.split_mode ?? '50/50' })
+      .insert({
+        family_id: familyId,
+        title: f.name,
+        amount: f.amount,
+        date: payDate,
+        category: f.category,
+        paid_by: f.default_paid_by ?? userId,
+        split_mode: f.split_mode ?? '50/50',
+        receipt_url,
+      })
       .select().single()
     if (expErr || !exp) { setMarkingId(null); return }
+
     await supabase.from('fixed_expense_payments')
       .insert({ fixed_expense_id: f.id, family_id: familyId, month, expense_id: exp.id, created_by: userId })
     setPaidIds(prev => new Set([...prev, f.id]))
 
-    // If one-time (not recurring), auto-deactivate after payment
+    // If one-time, auto-deactivate after payment
     if (!(f.is_recurring ?? true)) {
       await supabase.from('fixed_expenses').update({ is_active: false }).eq('id', f.id)
       setFixedList(prev => prev.filter(fx => fx.id !== f.id))
@@ -168,13 +226,30 @@ export default function FixedPage() {
     </div>
   )
 
-  const active = fixedList.filter(f => f.is_active)
-  const unpaid = active.filter(f => !paidIds.has(f.id))
-  const paid   = active.filter(f => paidIds.has(f.id))
+  const active  = fixedList.filter(f => f.is_active)
+  const unpaid  = active.filter(f => !paidIds.has(f.id))
+  const paid    = active.filter(f => paidIds.has(f.id))
   const soonDue = unpaid.filter(f => daysUntilDue(f.due_day) <= 5)
 
   return (
     <div className="max-w-lg mx-auto">
+
+      {/* ── Receipt lightbox ─────────────────────────────────────────── */}
+      {viewingReceipt && (
+        <div className="fixed inset-0 bg-black/90 z-[70] flex items-center justify-center p-4"
+          onClick={() => setViewingReceipt(null)}>
+          <button
+            className="absolute top-5 right-5 text-white/70 active:text-white bg-black/30 rounded-full p-2"
+            onClick={() => setViewingReceipt(null)}>
+            <X size={22} />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={viewingReceipt} alt="Recibo"
+            className="max-w-full max-h-[85vh] rounded-2xl object-contain shadow-2xl"
+            onClick={e => e.stopPropagation()}
+          />
+        </div>
+      )}
 
       {/* Header */}
       <div className="px-4 pt-5 pb-3 flex items-center justify-between">
@@ -189,7 +264,7 @@ export default function FixedPage() {
         </button>
       </div>
 
-      {/* ── Due-soon reminder banner ──────────────────────────────────────── */}
+      {/* ── Due-soon banner ──────────────────────────────────────────── */}
       {soonDue.length > 0 && (
         <div className="px-4 mb-3">
           <div className="bg-orange-50 border border-orange-100 rounded-2xl px-4 py-3 flex items-start gap-3">
@@ -209,13 +284,15 @@ export default function FixedPage() {
         </div>
       )}
 
-      {/* ── Confirm payment sheet ────────────────────────────────────────── */}
+      {/* ── Confirm payment sheet ─────────────────────────────────────── */}
       {pendingMark && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end"
-          onClick={() => setPendingMark(null)}>
+          onClick={handleCancelMark}>
           <div className="bg-white w-full rounded-t-3xl p-5 space-y-4"
+            style={{ maxHeight: '88vh' }}
             onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto" />
+
             <div>
               <h2 className="text-base font-bold text-gray-900">Confirmar pago</h2>
               <p className="text-sm text-gray-500 mt-0.5">
@@ -227,6 +304,8 @@ export default function FixedPage() {
                 )}
               </p>
             </div>
+
+            {/* Fecha de pago */}
             <div>
               <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">
                 Fecha de pago
@@ -238,8 +317,56 @@ export default function FixedPage() {
                 className="w-full border border-gray-200 bg-gray-50 rounded-xl px-3 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
+
+            {/* Recibo (opcional) */}
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">
+                Recibo <span className="font-normal normal-case text-gray-400">(opcional)</span>
+              </label>
+
+              {/* Preview */}
+              {payReceiptPreview && (
+                <div className="mb-2 relative inline-block">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={payReceiptPreview} alt="Recibo"
+                    className="w-14 h-14 rounded-xl object-cover border border-gray-200 cursor-pointer"
+                    onClick={() => setViewingReceipt(payReceiptPreview)}
+                  />
+                  <button type="button" onClick={clearPayReceipt}
+                    className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center shadow">
+                    <X size={10} strokeWidth={3} />
+                  </button>
+                </div>
+              )}
+
+              {/* Galería / Cámara */}
+              <div className="flex gap-2">
+                <button type="button"
+                  onClick={() => triggerPayReceiptPick('gallery')}
+                  className="flex-1 flex items-center justify-center gap-1.5 border border-gray-200 bg-gray-50 rounded-2xl py-2.5 text-sm text-gray-600 font-medium active:bg-gray-100">
+                  <ImageIcon size={14} strokeWidth={2} className="text-gray-400" />
+                  Galería
+                </button>
+                <button type="button"
+                  onClick={() => triggerPayReceiptPick('camera')}
+                  className="flex-1 flex items-center justify-center gap-1.5 border border-gray-200 bg-gray-50 rounded-2xl py-2.5 text-sm text-gray-600 font-medium active:bg-gray-100">
+                  <Camera size={14} strokeWidth={2} className="text-gray-400" />
+                  Cámara
+                </button>
+              </div>
+
+              <input
+                ref={payReceiptInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handlePayReceiptChange}
+              />
+            </div>
+
+            {/* Actions */}
             <div className="flex gap-2">
-              <button onClick={() => setPendingMark(null)}
+              <button onClick={handleCancelMark}
                 className="flex-1 border border-gray-200 text-gray-600 font-semibold py-3.5 rounded-xl">
                 Cancelar
               </button>
@@ -255,7 +382,7 @@ export default function FixedPage() {
         </div>
       )}
 
-      {/* ── Presets sheet ─────────────────────────────────────────────────── */}
+      {/* ── Presets sheet ─────────────────────────────────────────────── */}
       {showPresets && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowPresets(false)}>
           <div className="bg-white w-full rounded-t-3xl p-5 max-h-[80vh] overflow-y-auto"
@@ -279,7 +406,7 @@ export default function FixedPage() {
         </div>
       )}
 
-      {/* ── Add / Edit form sheet ─────────────────────────────────────────── */}
+      {/* ── Add / Edit form sheet ─────────────────────────────────────── */}
       {showForm && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowForm(false)}>
           <div className="bg-white w-full rounded-t-3xl flex flex-col shadow-2xl"
@@ -340,7 +467,7 @@ export default function FixedPage() {
                 />
               </div>
 
-              {/* Tipo de pago: Mensual / Una vez */}
+              {/* Tipo de pago */}
               <div>
                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">
                   Tipo de pago
@@ -443,7 +570,7 @@ export default function FixedPage() {
               </div>
             </form>
 
-            {/* Sticky footer buttons */}
+            {/* Sticky footer */}
             <div className="flex-shrink-0 px-5 py-4 border-t border-gray-100 bg-white flex gap-2"
               style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
               <button type="button" onClick={() => setShowForm(false)}
@@ -459,7 +586,7 @@ export default function FixedPage() {
         </div>
       )}
 
-      {/* ── List ─────────────────────────────────────────────────────────── */}
+      {/* ── List ─────────────────────────────────────────────────────── */}
       <div className="px-4 space-y-4 pb-6">
         {active.length === 0 ? (
           <div className="text-center py-16 text-gray-400">
@@ -511,10 +638,10 @@ function FixedCard({ fixed, paid, marking, userId, memberName, members, daysUnti
   daysUntil: number | null
   onMarkPaid: () => void; onEdit: () => void; onDelete: () => void
 }) {
-  const recurring  = fixed.is_recurring ?? true
-  const splitMode  = fixed.split_mode ?? '50/50'
-  const urgent     = daysUntil !== null && daysUntil <= 2
-  const soon       = daysUntil !== null && daysUntil <= 5 && daysUntil > 2
+  const recurring   = fixed.is_recurring ?? true
+  const splitMode   = fixed.split_mode ?? '50/50'
+  const urgent      = daysUntil !== null && daysUntil <= 2
+  const soon        = daysUntil !== null && daysUntil <= 5 && daysUntil > 2
   const otherMember = members.find(m => m.user_id !== fixed.default_paid_by)
 
   return (
@@ -539,7 +666,6 @@ function FixedCard({ fixed, paid, marking, userId, memberName, members, daysUnti
             <p className={`font-semibold text-sm ${paid ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
               {fixed.name}
             </p>
-            {/* Due-soon badge */}
             {!paid && daysUntil !== null && daysUntil <= 5 && (
               <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
                 daysUntil === 0
@@ -551,7 +677,6 @@ function FixedCard({ fixed, paid, marking, userId, memberName, members, daysUnti
                 {daysUntil === 0 ? 'Hoy' : `${daysUntil}d`}
               </span>
             )}
-            {/* Recurring / one-time badge */}
             {!paid && (
               <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
                 recurring
@@ -561,7 +686,6 @@ function FixedCard({ fixed, paid, marking, userId, memberName, members, daysUnti
                 {recurring ? 'Mensual' : 'Una vez'}
               </span>
             )}
-            {/* Split mode badge */}
             {splitMode === 'para_otro' && (
               <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 bg-amber-50 text-amber-600 border border-amber-100">
                 cargo de {otherMember?.display_name ?? 'otro'}

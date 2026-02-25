@@ -1,18 +1,18 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   CATEGORIES, CATEGORY_GROUPS, GROUP_COLORS, DEFAULT_CATEGORY,
   getCategoryLabel, getCustomCategories, addCustomCategory, removeCustomCategory,
   type Category,
 } from '@/lib/categories'
-import { Search, Plus, X, MessageSquare, Receipt, Pencil, Trash2, Download } from 'lucide-react'
+import { Search, Plus, X, MessageSquare, Receipt, Pencil, Trash2, Download, Camera, ImageIcon, Eye } from 'lucide-react'
 
 type Expense = {
   id: string; title: string; amount: number; date: string
   category: string; paid_by: string; note: string | null; created_at: string
-  split_mode: string | null
+  split_mode: string | null; receipt_url: string | null
 }
 type Note   = { id: string; expense_id: string; user_id: string; content: string; created_at: string }
 type Member = { user_id: string; display_name: string | null }
@@ -72,6 +72,14 @@ export default function ExpensesPage() {
   const [saving,    setSaving]    = useState(false)
   const [split,     setSplit]     = useState<'50/50' | 'personal' | 'para_otro'>('50/50')
 
+  // Receipt state
+  const receiptInputRef                   = useRef<HTMLInputElement>(null)
+  const [receiptFile,    setReceiptFile]    = useState<File | null>(null)
+  const [receiptPreview, setReceiptPreview] = useState<string | null>(null) // local blob URL
+  const [receiptCurrentPath, setReceiptCurrentPath] = useState<string | null>(null) // path from DB
+  const [receiptCurrentPreview, setReceiptCurrentPreview] = useState<string | null>(null) // signed URL for existing
+  const [viewingReceipt, setViewingReceipt] = useState<string | null>(null)
+
   // Custom categories
   const [customCats,    setCustomCats]    = useState<Category[]>([])
   const [showCatInput,  setShowCatInput]  = useState(false)
@@ -113,7 +121,6 @@ export default function ExpensesPage() {
       setLoading(false)
     }
     init()
-    // Load custom categories from localStorage
     setCustomCats(getCustomCategories())
   }, [supabase, loadExpenses])
 
@@ -126,38 +133,91 @@ export default function ExpensesPage() {
 
   const monthTotal = useMemo(() => filtered.reduce((s, e) => s + Number(e.amount), 0), [filtered])
 
+  // ── Receipt helpers ────────────────────────────────────────────────────────
+  function triggerReceiptPick(mode: 'gallery' | 'camera') {
+    const inp = receiptInputRef.current
+    if (!inp) return
+    if (mode === 'camera') inp.setAttribute('capture', 'environment')
+    else                   inp.removeAttribute('capture')
+    inp.click()
+  }
+
+  function handleReceiptChange(ev: React.ChangeEvent<HTMLInputElement>) {
+    const file = ev.target.files?.[0]
+    if (!file) return
+    setReceiptFile(file)
+    setReceiptPreview(URL.createObjectURL(file))
+    ev.target.value = ''
+  }
+
+  function clearNewReceipt() {
+    if (receiptPreview) URL.revokeObjectURL(receiptPreview)
+    setReceiptFile(null)
+    setReceiptPreview(null)
+  }
+
+  async function handleViewReceipt(path: string) {
+    const { data } = await supabase.storage.from('receipts').createSignedUrl(path, 3600)
+    if (data?.signedUrl) setViewingReceipt(data.signedUrl)
+  }
+
+  // ── Form open helpers ──────────────────────────────────────────────────────
   function openAdd() {
     setEditId(null); setTitle(''); setAmount(''); setDate(todayStr())
     setCategory(DEFAULT_CATEGORY); setPaidBy(userId ?? ''); setExpNote('')
-    setSplit('50/50'); setFormError(''); setShowCatInput(false); setNewCatLabel(''); setShowForm(true)
+    setSplit('50/50'); setFormError(''); setShowCatInput(false); setNewCatLabel('')
+    clearNewReceipt(); setReceiptCurrentPath(null); setReceiptCurrentPreview(null)
+    setShowForm(true)
   }
+
   function openEdit(e: Expense) {
     setEditId(e.id); setTitle(e.title); setAmount(String(e.amount))
     setDate(e.date); setCategory(e.category); setPaidBy(e.paid_by)
     setExpNote(e.note ?? '')
     setSplit((e.split_mode as '50/50' | 'personal' | 'para_otro') ?? '50/50')
-    setFormError(''); setShowCatInput(false); setNewCatLabel(''); setShowForm(true)
+    setFormError(''); setShowCatInput(false); setNewCatLabel('')
+    clearNewReceipt()
+    setReceiptCurrentPath(e.receipt_url)
+    setReceiptCurrentPreview(null)
+    if (e.receipt_url) {
+      supabase.storage.from('receipts').createSignedUrl(e.receipt_url, 3600)
+        .then(({ data }) => setReceiptCurrentPreview(data?.signedUrl ?? null))
+    }
+    setShowForm(true)
   }
 
+  // ── Save ──────────────────────────────────────────────────────────────────
   async function handleSave(ev: React.FormEvent) {
     ev.preventDefault(); setFormError('')
     const amt = parseFloat(amount)
     if (isNaN(amt) || amt <= 0) { setFormError('Ingresa un monto válido mayor a 0'); return }
     setSaving(true)
+
+    // Upload new receipt if any
+    let receipt_url: string | null = receiptCurrentPath
+    if (receiptFile && familyId) {
+      const ext  = receiptFile.name.split('.').pop() ?? 'jpg'
+      const path = `family/${familyId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+      const { error: upErr } = await supabase.storage.from('receipts').upload(path, receiptFile)
+      if (!upErr) receipt_url = path
+    }
+
     if (editId) {
       const { error } = await supabase.from('expenses')
-        .update({ title, amount: amt, date, category, paid_by: paidBy, note: expNote || null, split_mode: split })
+        .update({ title, amount: amt, date, category, paid_by: paidBy, note: expNote || null, split_mode: split, receipt_url })
         .eq('id', editId)
       if (error) { setFormError(error.message); setSaving(false); return }
     } else {
       const { error } = await supabase.from('expenses')
-        .insert({ family_id: familyId, title, amount: amt, date, category, paid_by: paidBy, note: expNote || null, split_mode: split })
+        .insert({ family_id: familyId, title, amount: amt, date, category, paid_by: paidBy, note: expNote || null, split_mode: split, receipt_url })
       if (error) { setFormError(error.message); setSaving(false); return }
     }
     setSaving(false); setShowForm(false)
+    clearNewReceipt()
     await loadExpenses(familyId!)
   }
 
+  // ── Delete ─────────────────────────────────────────────────────────────────
   async function handleDelete(id: string) {
     if (!confirm('¿Borrar este gasto?')) return
     await supabase.from('expenses').delete().eq('id', id)
@@ -165,6 +225,7 @@ export default function ExpensesPage() {
     if (openNotes === id) setOpenNotes(null)
   }
 
+  // ── Notes ──────────────────────────────────────────────────────────────────
   async function toggleNotes(id: string) {
     if (openNotes === id) { setOpenNotes(null); return }
     setOpenNotes(id); setNoteText('')
@@ -185,11 +246,11 @@ export default function ExpensesPage() {
     setNotes(prev => ({ ...prev, [expenseId]: (prev[expenseId] ?? []).filter(n => n.id !== noteId) }))
   }
 
+  // ── Custom categories ──────────────────────────────────────────────────────
   function handleAddCustomCat() {
     if (!newCatLabel.trim()) return
     const cat = addCustomCategory(newCatLabel)
-    const updated = getCustomCategories()
-    setCustomCats(updated)
+    setCustomCats(getCustomCategories())
     setCategory(cat.value)
     setNewCatLabel(''); setShowCatInput(false)
   }
@@ -213,7 +274,24 @@ export default function ExpensesPage() {
   return (
     <div className="max-w-lg mx-auto">
 
-      {/* ── Header ──────────────────────────────────── */}
+      {/* ── Receipt lightbox ─────────────────────────────────── */}
+      {viewingReceipt && (
+        <div className="fixed inset-0 bg-black/90 z-[70] flex items-center justify-center p-4"
+          onClick={() => setViewingReceipt(null)}>
+          <button
+            className="absolute top-5 right-5 text-white/70 active:text-white bg-black/30 rounded-full p-2"
+            onClick={() => setViewingReceipt(null)}>
+            <X size={22} />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={viewingReceipt} alt="Recibo"
+            className="max-w-full max-h-[85vh] rounded-2xl object-contain shadow-2xl"
+            onClick={e => e.stopPropagation()}
+          />
+        </div>
+      )}
+
+      {/* ── Header ──────────────────────────────────────────────────── */}
       <div className="px-4 pt-5 pb-3 flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Gastos</h1>
@@ -237,7 +315,7 @@ export default function ExpensesPage() {
         </div>
       </div>
 
-      {/* ── Filtros ─────────────────────────────────── */}
+      {/* ── Filtros ──────────────────────────────────────────────── */}
       <div className="px-4 mb-4 space-y-2">
         <div className="relative">
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" strokeWidth={2} />
@@ -261,7 +339,7 @@ export default function ExpensesPage() {
         </div>
       </div>
 
-      {/* ── Formulario bottom sheet ──────────────────── */}
+      {/* ── Formulario bottom sheet ───────────────────────────────── */}
       {showForm && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end"
           onClick={() => setShowForm(false)}>
@@ -382,7 +460,6 @@ export default function ExpensesPage() {
                         )
                       })}
 
-                      {/* Add new custom category */}
                       {showCatInput ? (
                         <div className="flex items-center gap-1.5">
                           <input
@@ -415,7 +492,7 @@ export default function ExpensesPage() {
                 </div>
               </div>
 
-              {/* ¿Quién pagó? — pills */}
+              {/* ¿Quién pagó? */}
               {members.length > 0 && (
                 <div>
                   <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">¿Quién pagó?</label>
@@ -447,7 +524,7 @@ export default function ExpensesPage() {
                 </div>
               )}
 
-              {/* División — toggle */}
+              {/* División */}
               <div>
                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">División</label>
                 <div className="grid grid-cols-3 gap-2">
@@ -495,6 +572,66 @@ export default function ExpensesPage() {
                   className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors"
                 />
               </div>
+
+              {/* Recibo */}
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">
+                  Recibo <span className="font-normal normal-case text-gray-400">(opcional)</span>
+                </label>
+
+                {/* Existing receipt preview (edit mode) */}
+                {editId && receiptCurrentPreview && !receiptPreview && (
+                  <div className="mb-2 flex items-center gap-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={receiptCurrentPreview} alt="Recibo actual"
+                      className="w-14 h-14 rounded-xl object-cover border border-gray-200 cursor-pointer"
+                      onClick={() => setViewingReceipt(receiptCurrentPreview)}
+                    />
+                    <p className="text-[11px] text-gray-400 leading-snug">
+                      Recibo actual.<br />Sube otro para reemplazar.
+                    </p>
+                  </div>
+                )}
+
+                {/* New receipt preview */}
+                {receiptPreview && (
+                  <div className="mb-2 relative inline-block">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={receiptPreview} alt="Recibo"
+                      className="w-14 h-14 rounded-xl object-cover border border-gray-200"
+                    />
+                    <button type="button" onClick={clearNewReceipt}
+                      className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center shadow">
+                      <X size={10} strokeWidth={3} />
+                    </button>
+                  </div>
+                )}
+
+                {/* Galería / Cámara buttons */}
+                <div className="flex gap-2">
+                  <button type="button"
+                    onClick={() => triggerReceiptPick('gallery')}
+                    className="flex-1 flex items-center justify-center gap-1.5 border border-gray-200 bg-gray-50 rounded-2xl py-3 text-sm text-gray-600 font-medium active:bg-gray-100 transition-colors">
+                    <ImageIcon size={15} strokeWidth={2} className="text-gray-400" />
+                    Galería
+                  </button>
+                  <button type="button"
+                    onClick={() => triggerReceiptPick('camera')}
+                    className="flex-1 flex items-center justify-center gap-1.5 border border-gray-200 bg-gray-50 rounded-2xl py-3 text-sm text-gray-600 font-medium active:bg-gray-100 transition-colors">
+                    <Camera size={15} strokeWidth={2} className="text-gray-400" />
+                    Cámara
+                  </button>
+                </div>
+
+                {/* Hidden file input */}
+                <input
+                  ref={receiptInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleReceiptChange}
+                />
+              </div>
             </form>
 
             {/* Botones sticky */}
@@ -513,7 +650,7 @@ export default function ExpensesPage() {
         </div>
       )}
 
-      {/* ── Lista de gastos ──────────────────────────── */}
+      {/* ── Lista de gastos ───────────────────────────────────── */}
       <div className="px-4 space-y-3">
         {filtered.length === 0 ? (
           <div className="text-center py-16 text-gray-400">
@@ -569,13 +706,23 @@ export default function ExpensesPage() {
                 </div>
               </div>
 
-              <button onClick={() => toggleNotes(exp.id)}
-                className="mt-2 flex items-center gap-1.5 text-xs text-blue-500 active:text-blue-700 ml-12">
-                <MessageSquare size={12} />
-                {openNotes === exp.id
-                  ? 'Ocultar notas'
-                  : `Notas${notes[exp.id]?.length ? ` (${notes[exp.id].length})` : ''}`}
-              </button>
+              {/* Notes + Receipt row */}
+              <div className="mt-2 flex items-center gap-4 ml-12">
+                <button onClick={() => toggleNotes(exp.id)}
+                  className="flex items-center gap-1.5 text-xs text-blue-500 active:text-blue-700">
+                  <MessageSquare size={12} />
+                  {openNotes === exp.id
+                    ? 'Ocultar notas'
+                    : `Notas${notes[exp.id]?.length ? ` (${notes[exp.id].length})` : ''}`}
+                </button>
+                {exp.receipt_url && (
+                  <button onClick={() => handleViewReceipt(exp.receipt_url!)}
+                    className="flex items-center gap-1.5 text-xs text-purple-500 active:text-purple-700">
+                    <Eye size={12} />
+                    Ver recibo
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Panel de notas */}
