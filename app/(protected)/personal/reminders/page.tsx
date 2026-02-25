@@ -1,13 +1,29 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Plus, Bell, Pencil, Trash2, X, Check, CreditCard, RefreshCw, BellOff } from 'lucide-react'
+import {
+  Plus, Bell, Pencil, Trash2, X, Check, CreditCard, RefreshCw, BellOff,
+  ChevronRight,
+} from 'lucide-react'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type Account = { id: string; name: string; color: string }
-type Card    = { id: string; account_id: string; name: string; last_four: string | null; color: string }
+
+type Card = {
+  id: string
+  account_id: string
+  name: string
+  last_four: string | null
+  credit_limit: number
+  initial_balance: number
+  due_day: number | null
+  color: string
+}
+
+type CardTxSummary = { card_id: string; type: 'cargo' | 'pago'; amount: number }
 
 type Reminder = {
   id: string
@@ -21,6 +37,11 @@ type Reminder = {
   color: string
   is_active: boolean
 }
+
+// Unified display item (manual reminder OR auto card reminder)
+type DisplayItem =
+  | { kind: 'reminder'; data: Reminder; days: number }
+  | { kind: 'card';     data: Card;     days: number; balance: number }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -42,38 +63,47 @@ function dueBadge(days: number) {
   if (days === 0) return { label: '¡Hoy!',           cls: 'bg-red-100 text-red-600' }
   if (days === 1) return { label: 'Mañana',          cls: 'bg-orange-100 text-orange-600' }
   if (days <= 7)  return { label: `En ${days} días`, cls: 'bg-yellow-100 text-yellow-700' }
-  return              { label: `Día ${days}°`,       cls: 'bg-gray-100 text-gray-500' }
+  return              { label: `Día ${days > 28 ? (days % 28) || 28 : days}°`,  cls: 'bg-gray-100 text-gray-500' }
 }
 
 function fmt(n: number) {
-  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function calcCardBalance(card: Card, cardTxs: CardTxSummary[]) {
+  const mine   = cardTxs.filter(t => t.card_id === card.id)
+  const cargos = mine.filter(t => t.type === 'cargo').reduce((s, t) => s + Number(t.amount), 0)
+  const pagos  = mine.filter(t => t.type === 'pago').reduce((s, t) => s + Number(t.amount), 0)
+  return Number(card.initial_balance) + cargos - pagos
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function RemindersPage() {
   const supabase = createClient()
+  const router   = useRouter()
 
   const [userId,    setUserId]    = useState<string | null>(null)
   const [reminders, setReminders] = useState<Reminder[]>([])
   const [accounts,  setAccounts]  = useState<Account[]>([])
   const [cards,     setCards]     = useState<Card[]>([])
+  const [cardTxs,   setCardTxs]   = useState<CardTxSummary[]>([])
   const [loading,   setLoading]   = useState(true)
   const [showInactive, setShowInactive] = useState(false)
 
   // Form
-  const [showForm,    setShowForm]    = useState(false)
-  const [editId,      setEditId]      = useState<string | null>(null)
-  const [rTitle,      setRTitle]      = useState('')
-  const [rAmount,     setRAmount]     = useState('')
-  const [rType,       setRType]       = useState<'tarjeta' | 'recurrente'>('recurrente')
-  const [rAccountId,  setRAccountId]  = useState('')
-  const [rCardId,     setRCardId]     = useState('')
-  const [rDueDay,     setRDueDay]     = useState('')
-  const [rNotes,      setRNotes]      = useState('')
-  const [rColor,      setRColor]      = useState(COLORS[0])
-  const [saving,      setSaving]      = useState(false)
-  const [formError,   setFormError]   = useState('')
+  const [showForm,   setShowForm]   = useState(false)
+  const [editId,     setEditId]     = useState<string | null>(null)
+  const [rTitle,     setRTitle]     = useState('')
+  const [rAmount,    setRAmount]    = useState('')
+  const [rType,      setRType]      = useState<'tarjeta' | 'recurrente'>('recurrente')
+  const [rAccountId, setRAccountId] = useState('')
+  const [rCardId,    setRCardId]    = useState('')
+  const [rDueDay,    setRDueDay]    = useState('')
+  const [rNotes,     setRNotes]     = useState('')
+  const [rColor,     setRColor]     = useState(COLORS[0])
+  const [saving,     setSaving]     = useState(false)
+  const [formError,  setFormError]  = useState('')
 
   // ── Load ──────────────────────────────────────────────────────────────────
 
@@ -82,22 +112,58 @@ export default function RemindersPage() {
     if (!user) return
     setUserId(user.id)
 
-    const [{ data: rems }, { data: accs }, { data: cds }] = await Promise.all([
+    const [{ data: rems }, { data: accs }, { data: cds }, { data: cTxs }] = await Promise.all([
       supabase.from('personal_reminders')
         .select('*').eq('user_id', user.id).order('due_day', { ascending: true }),
       supabase.from('savings_accounts')
         .select('id, name, color').eq('user_id', user.id).eq('is_archived', false),
       supabase.from('savings_credit_cards')
-        .select('id, account_id, name, last_four, color').eq('user_id', user.id).eq('is_active', true),
+        .select('id, account_id, name, last_four, credit_limit, initial_balance, due_day, color')
+        .eq('user_id', user.id).eq('is_active', true).not('due_day', 'is', null),
+      supabase.from('savings_credit_card_transactions')
+        .select('card_id, type, amount').eq('user_id', user.id),
     ])
 
     setReminders(rems ?? [])
     setAccounts(accs ?? [])
     setCards(cds ?? [])
+    setCardTxs(cTxs ?? [])
     setLoading(false)
   }, [supabase])
 
   useEffect(() => { load() }, [load])
+
+  // ── Build unified display list ────────────────────────────────────────────
+
+  // IDs of cards already covered by a manual reminder (to avoid duplicates)
+  const coveredCardIds = new Set(
+    reminders.filter(r => r.card_id).map(r => r.card_id as string)
+  )
+
+  const activeReminders  = reminders.filter(r => r.is_active)
+  const inactiveReminders = reminders.filter(r => !r.is_active)
+
+  // Auto card items: cards with due_day that are NOT already covered by a manual reminder
+  const autoCardItems: DisplayItem[] = cards
+    .filter(c => c.due_day && !coveredCardIds.has(c.id))
+    .map(c => ({
+      kind:    'card' as const,
+      data:    c,
+      days:    daysUntilDue(c.due_day!),
+      balance: calcCardBalance(c, cardTxs),
+    }))
+
+  // Active list = auto card reminders + active manual reminders, sorted by days
+  const activeList: DisplayItem[] = [
+    ...autoCardItems,
+    ...activeReminders.map(r => ({
+      kind: 'reminder' as const,
+      data: r,
+      days: daysUntilDue(r.due_day),
+    })),
+  ].sort((a, b) => a.days - b.days)
+
+  const hasInactive = inactiveReminders.length > 0
 
   // ── Form helpers ──────────────────────────────────────────────────────────
 
@@ -126,9 +192,7 @@ export default function RemindersPage() {
 
     setSaving(true)
     const payload = {
-      title: rTitle.trim(),
-      amount: amt,
-      type: rType,
+      title: rTitle.trim(), amount: amt, type: rType,
       account_id: rAccountId || null,
       card_id: rType === 'tarjeta' && rCardId ? rCardId : null,
       due_day: dueDay,
@@ -159,12 +223,6 @@ export default function RemindersPage() {
     await load()
   }
 
-  // ── Derived ───────────────────────────────────────────────────────────────
-
-  const visible    = reminders.filter(r => showInactive ? !r.is_active : r.is_active)
-  const hasInactive = reminders.some(r => !r.is_active)
-
-  // Filtered cards for the selected account in the form
   const availableCards = rAccountId
     ? cards.filter(c => c.account_id === rAccountId)
     : cards
@@ -173,6 +231,8 @@ export default function RemindersPage() {
     <div className="flex items-center justify-center h-64 text-gray-400 text-sm">Cargando…</div>
   )
 
+  // ── Render ────────────────────────────────────────────────────────────────
+
   return (
     <div className="max-w-lg mx-auto pb-6">
 
@@ -180,7 +240,9 @@ export default function RemindersPage() {
       <div className="px-4 pt-5 pb-4 flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Recordatorios</h1>
-          <p className="text-xs text-gray-400 mt-0.5">Pagos y fechas importantes</p>
+          <p className="text-xs text-gray-400 mt-0.5">
+            {activeList.length} pago{activeList.length !== 1 ? 's' : ''} próximo{activeList.length !== 1 ? 's' : ''}
+          </p>
         </div>
         <button onClick={openAdd}
           className="flex items-center gap-1.5 bg-amber-500 text-white text-sm font-bold px-4 py-2.5 rounded-2xl active:opacity-80 shadow-sm"
@@ -197,110 +259,226 @@ export default function RemindersPage() {
           >
             {showInactive
               ? <><Bell size={12} /> Ver activos</>
-              : <><BellOff size={12} /> Ver pausados ({reminders.filter(r => !r.is_active).length})</>
+              : <><BellOff size={12} /> Ver pausados ({inactiveReminders.length})</>
             }
           </button>
         </div>
       )}
 
-      {/* ── Lista ─────────────────────────────────────── */}
-      <div className="px-4 space-y-3">
-        {visible.length === 0 ? (
-          <div className="text-center py-16">
-            <div className="w-16 h-16 bg-amber-50 rounded-3xl flex items-center justify-center mx-auto mb-4">
-              <Bell size={28} className="text-amber-400" strokeWidth={1.5} />
-            </div>
-            <h3 className="font-bold text-gray-700 text-base mb-2">
-              {showInactive ? 'No hay recordatorios pausados' : 'Sin recordatorios aún'}
-            </h3>
-            {!showInactive && (
+      {/* ── Lista activos + auto-tarjetas ─────────────── */}
+      {!showInactive && (
+        <div className="px-4 space-y-3">
+          {activeList.length === 0 ? (
+            <div className="text-center py-16">
+              <div className="w-16 h-16 bg-amber-50 rounded-3xl flex items-center justify-center mx-auto mb-4">
+                <Bell size={28} className="text-amber-400" strokeWidth={1.5} />
+              </div>
+              <h3 className="font-bold text-gray-700 text-base mb-2">Sin pagos próximos</h3>
               <p className="text-sm text-gray-400 mb-5 max-w-xs mx-auto">
-                Crea alertas para vencimientos de tarjetas, cuotas de préstamos y pagos recurrentes.
+                Crea recordatorios para cuotas, servicios y pagos recurrentes. Las tarjetas con fecha de pago aparecen aquí automáticamente.
               </p>
-            )}
-            {!showInactive && (
               <button onClick={openAdd}
                 className="inline-flex items-center gap-2 bg-amber-500 text-white font-semibold px-6 py-3 rounded-2xl text-sm active:opacity-80 shadow-md"
               >
                 <Plus size={16} strokeWidth={2.5} /> Crear recordatorio
               </button>
-            )}
-          </div>
-        ) : (
-          visible.map(r => {
-            const days  = daysUntilDue(r.due_day)
-            const badge = dueBadge(days)
-            const linkedCard = r.card_id ? cards.find(c => c.id === r.card_id) : null
-            const linkedAcc  = r.account_id ? accounts.find(a => a.id === r.account_id) : null
+            </div>
+          ) : (
+            activeList.map(item => {
+              const badge = dueBadge(item.days)
 
-            return (
-              <div key={r.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <div className="px-4 py-3.5 flex items-start gap-3">
-                  {/* Icono */}
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
-                    style={{ backgroundColor: r.color + '22' }}
-                  >
-                    {r.type === 'tarjeta'
-                      ? <CreditCard size={18} style={{ color: r.color }} strokeWidth={1.8} />
-                      : <RefreshCw  size={18} style={{ color: r.color }} strokeWidth={1.8} />
-                    }
-                  </div>
+              /* ── Auto-card row ── */
+              if (item.kind === 'card') {
+                const card        = item.data
+                const usedPct     = card.credit_limit > 0 ? Math.min(item.balance / Number(card.credit_limit), 1) : 0
+                const urgency     = item.days === 0 ? 'bg-red-50 border-red-200'
+                                  : item.days <= 3  ? 'bg-orange-50 border-orange-200'
+                                  : item.days <= 7  ? 'bg-yellow-50 border-yellow-200'
+                                  :                   'bg-white border-gray-100'
 
-                  {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="font-semibold text-gray-900 text-[15px]">{r.title}</p>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${badge.cls}`}>
-                        {badge.label}
-                      </span>
-                    </div>
-                    {r.amount && (
-                      <p className="text-sm font-bold text-gray-700 mt-0.5">{fmt(r.amount)}</p>
-                    )}
-                    <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      <span className="text-[11px] text-gray-400">Día {r.due_day} de cada mes</span>
-                      {linkedCard && (
-                        <span className="text-[11px] text-indigo-500 flex items-center gap-0.5">
-                          <CreditCard size={10} /> {linkedCard.name}{linkedCard.last_four ? ` ···${linkedCard.last_four}` : ''}
-                        </span>
-                      )}
-                      {linkedAcc && !linkedCard && (
-                        <span className="text-[11px] text-gray-400">{linkedAcc.name}</span>
-                      )}
-                    </div>
-                    {r.notes && <p className="text-[11px] text-gray-400 mt-0.5 truncate">{r.notes}</p>}
-                  </div>
-
-                  {/* Acciones */}
-                  <div className="flex flex-col gap-2 flex-shrink-0">
-                    <button onClick={() => openEdit(r)} className="text-gray-300 active:text-blue-500 p-1">
-                      <Pencil size={14} />
-                    </button>
-                    <button onClick={() => toggleActive(r)}
-                      className={`p-1 ${r.is_active ? 'text-gray-300 active:text-orange-500' : 'text-orange-400 active:text-orange-600'}`}
+                return (
+                  <div key={'card-' + card.id} className={`rounded-2xl border shadow-sm overflow-hidden ${urgency}`}>
+                    <button
+                      onClick={() => router.push(`/personal/cards/${card.id}`)}
+                      className="w-full px-4 py-3.5 flex items-start gap-3 text-left active:opacity-80"
                     >
-                      {r.is_active ? <BellOff size={14} /> : <Bell size={14} />}
+                      {/* Icono */}
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
+                        style={{ backgroundColor: card.color + '22' }}
+                      >
+                        <CreditCard size={18} style={{ color: card.color }} strokeWidth={1.8} />
+                      </div>
+
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-semibold text-gray-900 text-[15px]">
+                            {card.name}{card.last_four ? ` ···${card.last_four}` : ''}
+                          </p>
+                          <span className="text-[9px] font-bold bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full uppercase tracking-wide">
+                            Auto
+                          </span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${badge.cls}`}>
+                            {badge.label}
+                          </span>
+                        </div>
+
+                        {/* Barra uso */}
+                        {item.balance > 0 && (
+                          <div className="mt-1.5 h-1 bg-gray-200 rounded-full overflow-hidden w-full">
+                            <div className="h-full rounded-full"
+                              style={{
+                                width: `${usedPct * 100}%`,
+                                backgroundColor: usedPct > 0.8 ? '#EF4444' : usedPct > 0.5 ? '#F59E0B' : card.color,
+                              }}
+                            />
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-[11px] text-gray-500 font-semibold">{fmt(item.balance)}</span>
+                          <span className="text-[11px] text-gray-400">· Día {card.due_day} de cada mes</span>
+                        </div>
+                      </div>
+
+                      <ChevronRight size={14} className="text-gray-300 flex-shrink-0 mt-1" />
                     </button>
-                    <button onClick={() => deleteReminder(r)} className="text-gray-300 active:text-red-500 p-1">
-                      <Trash2 size={14} />
-                    </button>
+
+                    {/* Barra urgencia */}
+                    <div className={`h-1 ${
+                      item.days === 0 ? 'bg-red-400' :
+                      item.days <= 3  ? 'bg-orange-400' :
+                      item.days <= 7  ? 'bg-yellow-400' : 'bg-gray-100'
+                    }`} />
+                  </div>
+                )
+              }
+
+              /* ── Manual reminder row ── */
+              const r         = item.data
+              const linkedCard = r.card_id ? cards.find(c => c.id === r.card_id) : null
+              const linkedAcc  = r.account_id ? accounts.find(a => a.id === r.account_id) : null
+              const urgency    = item.days === 0 ? 'bg-red-50 border-red-200'
+                               : item.days <= 3  ? 'bg-orange-50 border-orange-200'
+                               : item.days <= 7  ? 'bg-yellow-50 border-yellow-200'
+                               :                   'bg-white border-gray-100'
+
+              return (
+                <div key={'rem-' + r.id} className={`rounded-2xl border shadow-sm overflow-hidden ${urgency}`}>
+                  <div className="px-4 py-3.5 flex items-start gap-3">
+                    {/* Icono */}
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
+                      style={{ backgroundColor: r.color + '22' }}
+                    >
+                      {r.type === 'tarjeta'
+                        ? <CreditCard size={18} style={{ color: r.color }} strokeWidth={1.8} />
+                        : <RefreshCw  size={18} style={{ color: r.color }} strokeWidth={1.8} />
+                      }
+                    </div>
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold text-gray-900 text-[15px]">{r.title}</p>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${badge.cls}`}>
+                          {badge.label}
+                        </span>
+                      </div>
+                      {r.amount && <p className="text-sm font-bold text-gray-700 mt-0.5">{fmt(r.amount)}</p>}
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        <span className="text-[11px] text-gray-400">Día {r.due_day} de cada mes</span>
+                        {linkedCard && (
+                          <span className="text-[11px] text-indigo-500 flex items-center gap-0.5">
+                            <CreditCard size={10} /> {linkedCard.name}{linkedCard.last_four ? ` ···${linkedCard.last_four}` : ''}
+                          </span>
+                        )}
+                        {linkedAcc && !linkedCard && (
+                          <span className="text-[11px] text-gray-400">{linkedAcc.name}</span>
+                        )}
+                      </div>
+                      {r.notes && <p className="text-[11px] text-gray-400 mt-0.5 truncate">{r.notes}</p>}
+                    </div>
+
+                    {/* Acciones */}
+                    <div className="flex flex-col gap-2 flex-shrink-0">
+                      <button onClick={() => openEdit(r)} className="text-gray-300 active:text-blue-500 p-1">
+                        <Pencil size={14} />
+                      </button>
+                      <button onClick={() => toggleActive(r)}
+                        className="text-gray-300 active:text-orange-500 p-1"
+                      >
+                        <BellOff size={14} />
+                      </button>
+                      <button onClick={() => deleteReminder(r)} className="text-gray-300 active:text-red-500 p-1">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Barra urgencia */}
+                  <div className={`h-1 ${
+                    item.days === 0 ? 'bg-red-400' :
+                    item.days <= 3  ? 'bg-orange-400' :
+                    item.days <= 7  ? 'bg-yellow-400' : 'bg-gray-100'
+                  }`} />
+                </div>
+              )
+            })
+          )}
+        </div>
+      )}
+
+      {/* ── Lista inactivos (pausados) ─────────────────── */}
+      {showInactive && (
+        <div className="px-4 space-y-3">
+          {inactiveReminders.length === 0 ? (
+            <p className="text-center text-sm text-gray-400 py-12">No hay recordatorios pausados.</p>
+          ) : (
+            inactiveReminders.map(r => {
+              const days  = daysUntilDue(r.due_day)
+              const badge = dueBadge(days)
+              return (
+                <div key={r.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm opacity-60 overflow-hidden">
+                  <div className="px-4 py-3.5 flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
+                      style={{ backgroundColor: r.color + '22' }}
+                    >
+                      {r.type === 'tarjeta'
+                        ? <CreditCard size={18} style={{ color: r.color }} strokeWidth={1.8} />
+                        : <RefreshCw  size={18} style={{ color: r.color }} strokeWidth={1.8} />
+                      }
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold text-gray-700 text-[15px]">{r.title}</p>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${badge.cls}`}>
+                          {badge.label}
+                        </span>
+                      </div>
+                      {r.amount && <p className="text-sm font-bold text-gray-600 mt-0.5">{fmt(r.amount)}</p>}
+                      <span className="text-[11px] text-gray-400">Día {r.due_day} de cada mes · Pausado</span>
+                    </div>
+                    <div className="flex flex-col gap-2 flex-shrink-0">
+                      <button onClick={() => toggleActive(r)}
+                        className="text-orange-400 active:text-emerald-500 p-1"
+                        title="Reactivar"
+                      >
+                        <Bell size={14} />
+                      </button>
+                      <button onClick={() => deleteReminder(r)} className="text-gray-300 active:text-red-500 p-1">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
                 </div>
-
-                {/* Barra de urgencia */}
-                <div className={`h-1 ${
-                  days === 0 ? 'bg-red-400' :
-                  days <= 3  ? 'bg-orange-400' :
-                  days <= 7  ? 'bg-yellow-400' : 'bg-gray-100'
-                }`} />
-              </div>
-            )
-          })
-        )}
-      </div>
+              )
+            })
+          )}
+        </div>
+      )}
 
       {/* ═══════════════════════════════════════════════════════════════════════
-          BOTTOM SHEET — Formulario
+          BOTTOM SHEET — Formulario recordatorio manual
       ════════════════════════════════════════════════════════════════════════ */}
       {showForm && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowForm(false)}>
@@ -348,7 +526,7 @@ export default function RemindersPage() {
                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">
                   Nombre del recordatorio
                 </label>
-                <input type="text" required placeholder="Ej: Cuota del carro, Visa Platino…"
+                <input type="text" required placeholder="Ej: Cuota del carro, Netflix…"
                   value={rTitle} onChange={e => setRTitle(e.target.value)}
                   className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-amber-400"
                 />
@@ -390,9 +568,7 @@ export default function RemindersPage() {
                     className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-amber-400"
                   >
                     <option value="">— Sin cuenta —</option>
-                    {accounts.map(a => (
-                      <option key={a.id} value={a.id}>{a.name}</option>
-                    ))}
+                    {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
                 </div>
               )}
