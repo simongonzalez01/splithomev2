@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   Home, Receipt, CalendarClock, ShoppingCart, CircleUser, TrendingUp,
-  LayoutDashboard, Wallet, ArrowLeftRight, Store, Bell,
+  LayoutDashboard, Wallet, ArrowLeftRight, Store, Bell, Handshake,
 } from 'lucide-react'
 import { useAppMode } from '@/contexts/AppModeContext'
 
@@ -25,8 +25,9 @@ const PERSONAL_NAV = [
 ]
 
 const BUSINESS_NAV = [
-  { href: '/business', label: 'Negocios', Icon: Store      },
-  { href: '/profile',  label: 'Perfil',   Icon: CircleUser },
+  { href: '/business',  label: 'Negocios', Icon: Store      },
+  { href: '/partners',  label: 'Socios',   Icon: Handshake  },
+  { href: '/profile',   label: 'Perfil',   Icon: CircleUser },
 ]
 
 export default function BottomNav() {
