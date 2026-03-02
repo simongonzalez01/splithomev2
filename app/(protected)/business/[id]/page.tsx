@@ -93,6 +93,11 @@ export default function BusinessDetailPage() {
   const [txSaving,    setTxSaving]    = useState(false)
   const [txError,     setTxError]     = useState('')
 
+  // ── Edit mode (transactions)
+  const [txEditId,          setTxEditId]          = useState<string | null>(null)
+  const [txOriginalItems,   setTxOriginalItems]   = useState<TxItem[]>([])
+  const [txExistingReceipt, setTxExistingReceipt] = useState<string | null>(null)
+
   // ── View receipt
   const [viewReceipt, setViewReceipt] = useState<string | null>(null)
 
@@ -172,12 +177,44 @@ export default function BusinessDetailPage() {
 
   // ─── Transaction handlers ─────────────────────────────────────────────────
   function openAddTx(type: typeof txType = 'venta') {
+    setTxEditId(null); setTxOriginalItems([]); setTxExistingReceipt(null)
     setTxType(type); setTxDesc(''); setTxDate(todayStr()); setTxNotes('')
     setTxItems(type === 'venta' || type === 'compra'
       ? [{ product_id: products[0]?.id ?? '', qty: '1', unit_price: '' }]
       : [])
     setTxAmount(''); setTxFile(null); setTxPreview(null)
     setTxError(''); setShowTxForm(true)
+  }
+
+  async function openEditTx(t: Transaction) {
+    setTxEditId(t.id)
+    setTxType(t.type)
+    setTxDesc(t.description ?? '')
+    setTxDate(t.date)
+    setTxNotes(t.notes ?? '')
+    setTxFile(null); setTxPreview(null)
+    setTxExistingReceipt(t.receipt_url)
+    setTxError('')
+
+    if (t.type === 'venta' || t.type === 'compra') {
+      const { data: items } = await supabase
+        .from('business_tx_items')
+        .select('product_id, quantity, unit_price, subtotal')
+        .eq('transaction_id', t.id)
+      const origItems = (items ?? []) as TxItem[]
+      setTxOriginalItems(origItems)
+      setTxItems(origItems.map(item => ({
+        product_id: item.product_id,
+        qty: String(item.quantity),
+        unit_price: String(item.unit_price),
+      })))
+      setTxAmount('')
+    } else {
+      setTxOriginalItems([])
+      setTxItems([])
+      setTxAmount(String(t.total))
+    }
+    setShowTxForm(true)
   }
 
   function addTxItem() {
@@ -240,32 +277,81 @@ export default function BusinessDetailPage() {
     }
 
     setTxSaving(true)
-    let receiptPath: string | null = null
-    if (txFile && userId) receiptPath = await uploadReceipt(txFile, userId)
 
-    const { data: newTx, error: txErr } = await supabase.from('business_transactions')
-      .insert({
-        business_id: id, user_id: userId, type: txType, total,
-        description: txDesc.trim() || null, date: txDate,
-        notes: txNotes.trim() || null, receipt_url: receiptPath,
-      })
-      .select('id').single()
+    // Determine receipt: keep existing when editing unless a new file was chosen
+    let receiptPath: string | null = txEditId ? txExistingReceipt : null
+    if (txFile && userId) {
+      const uploaded = await uploadReceipt(txFile, userId)
+      if (uploaded) receiptPath = uploaded
+    }
 
-    if (txErr || !newTx) { setTxError(txErr?.message ?? 'Error al guardar'); setTxSaving(false); return }
+    if (txEditId) {
+      // ── EDIT MODE ──────────────────────────────────────────────────────────
+      if (isItemBased) {
+        // Compute net stock delta: revert old items + apply new items in one pass
+        const deltas: Record<string, number> = {}
+        for (const orig of txOriginalItems) {
+          // Revert original effect (venta removed stock → add back; compra added → subtract)
+          const sign = txType === 'venta' ? +1 : -1
+          deltas[orig.product_id] = (deltas[orig.product_id] ?? 0) + sign * orig.quantity
+        }
+        for (const item of validItems) {
+          // Apply new effect
+          const sign = txType === 'venta' ? -1 : +1
+          deltas[item.product_id] = (deltas[item.product_id] ?? 0) + sign * item.quantity
+        }
+        // Fetch fresh stocks and apply net deltas
+        const { data: freshProds } = await supabase
+          .from('business_products').select('id, stock').eq('business_id', id)
+        for (const [prodId, delta] of Object.entries(deltas)) {
+          if (Math.abs(delta) < 0.001) continue
+          const prod = freshProds?.find(p => p.id === prodId)
+          if (!prod) continue
+          await supabase.from('business_products')
+            .update({ stock: Number(prod.stock) + delta }).eq('id', prodId)
+        }
+        // Replace tx items
+        await supabase.from('business_tx_items').delete().eq('transaction_id', txEditId)
+        await supabase.from('business_tx_items').insert(
+          validItems.map(item => ({ ...item, transaction_id: txEditId }))
+        )
+      }
 
-    // Guardar items y actualizar stock
-    if (isItemBased && validItems.length > 0) {
-      await supabase.from('business_tx_items').insert(
-        validItems.map(item => ({ ...item, transaction_id: newTx.id }))
-      )
-      // Actualizar stock de cada producto
-      for (const item of validItems) {
-        const prod = products.find(p => p.id === item.product_id)
-        if (!prod) continue
-        const newStock = txType === 'venta'
-          ? Number(prod.stock) - item.quantity     // venta → resta stock
-          : Number(prod.stock) + item.quantity      // compra → suma stock
-        await supabase.from('business_products').update({ stock: newStock }).eq('id', item.product_id)
+      // Update transaction record
+      const { error: updErr } = await supabase.from('business_transactions')
+        .update({
+          type: txType, total,
+          description: txDesc.trim() || null, date: txDate,
+          notes: txNotes.trim() || null, receipt_url: receiptPath,
+        })
+        .eq('id', txEditId)
+      if (updErr) { setTxError(updErr.message); setTxSaving(false); return }
+
+    } else {
+      // ── INSERT MODE ────────────────────────────────────────────────────────
+      const { data: newTx, error: txErr } = await supabase.from('business_transactions')
+        .insert({
+          business_id: id, user_id: userId, type: txType, total,
+          description: txDesc.trim() || null, date: txDate,
+          notes: txNotes.trim() || null, receipt_url: receiptPath,
+        })
+        .select('id').single()
+
+      if (txErr || !newTx) { setTxError(txErr?.message ?? 'Error al guardar'); setTxSaving(false); return }
+
+      // Guardar items y actualizar stock
+      if (isItemBased && validItems.length > 0) {
+        await supabase.from('business_tx_items').insert(
+          validItems.map(item => ({ ...item, transaction_id: newTx.id }))
+        )
+        for (const item of validItems) {
+          const prod = products.find(p => p.id === item.product_id)
+          if (!prod) continue
+          const newStock = txType === 'venta'
+            ? Number(prod.stock) - item.quantity   // venta → resta stock
+            : Number(prod.stock) + item.quantity   // compra → suma stock
+          await supabase.from('business_products').update({ stock: newStock }).eq('id', item.product_id)
+        }
       }
     }
 
@@ -557,9 +643,14 @@ export default function BusinessDetailPage() {
                     <p className={`font-bold text-lg ${TX_COLORS[t.type]}`}>
                       {(t.type === 'venta' || t.type === 'ingreso') ? '+' : '-'}{fmt(Number(t.total))}
                     </p>
-                    <button onClick={() => handleDeleteTx(t)} className="text-gray-300 active:text-red-500 mt-1">
-                      <Trash2 size={13} />
-                    </button>
+                    <div className="flex items-center gap-2 justify-end mt-1">
+                      <button onClick={() => openEditTx(t)} className="text-gray-300 active:text-blue-500">
+                        <Pencil size={13} />
+                      </button>
+                      <button onClick={() => handleDeleteTx(t)} className="text-gray-300 active:text-red-500">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -671,7 +762,7 @@ export default function BusinessDetailPage() {
               <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3" />
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-bold text-gray-900">
-                  Nueva {TX_LABEL[txType].toLowerCase()}
+                  {txEditId ? 'Editar' : 'Nueva'} {TX_LABEL[txType].toLowerCase()}
                 </h2>
                 <button onClick={() => setShowTxForm(false)} className="p-1 text-gray-400"><X size={20} /></button>
               </div>
@@ -680,16 +771,20 @@ export default function BusinessDetailPage() {
             <form id="tx-biz-form" onSubmit={handleSaveTx} className="flex-1 overflow-y-auto px-5 space-y-4 pt-1 pb-4">
               {txError && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-xl">{txError}</p>}
 
-              {/* Tipo */}
+              {/* Tipo — bloqueado al editar para no romper el stock */}
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {(['venta', 'compra', 'gasto', 'ingreso'] as const).map(t => (
-                  <button key={t} type="button" onClick={() => {
-                    setTxType(t)
-                    setTxItems(t === 'venta' || t === 'compra'
-                      ? [{ product_id: products[0]?.id ?? '', qty: '1', unit_price: '' }] : [])
-                    setTxAmount('')
-                  }}
-                    className={`flex-shrink-0 px-3 py-2 rounded-xl text-xs font-bold border-2 transition-all active:scale-95 ${
+                  <button key={t} type="button"
+                    disabled={!!txEditId}
+                    onClick={() => {
+                      setTxType(t)
+                      setTxItems(t === 'venta' || t === 'compra'
+                        ? [{ product_id: products[0]?.id ?? '', qty: '1', unit_price: '' }] : [])
+                      setTxAmount('')
+                    }}
+                    className={`flex-shrink-0 px-3 py-2 rounded-xl text-xs font-bold border-2 transition-all ${
+                      txEditId ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'
+                    } ${
                       txType === t
                         ? t === 'venta'   ? 'border-emerald-500 bg-emerald-500 text-white'
                         : t === 'compra'  ? 'border-blue-500 bg-blue-500 text-white'
@@ -701,6 +796,9 @@ export default function BusinessDetailPage() {
                   </button>
                 ))}
               </div>
+              {txEditId && (
+                <p className="text-[11px] text-gray-400 -mt-2">El tipo no se puede cambiar al editar.</p>
+              )}
 
               {/* Descripción */}
               <div>
@@ -818,21 +916,38 @@ export default function BusinessDetailPage() {
                     </button>
                   </div>
                 ) : (
-                  <div className="flex gap-2">
-                    <button type="button" onClick={() => fileInputRef.current?.click()}
-                      className="flex-1 flex items-center justify-center gap-1.5 border-2 border-dashed border-gray-300 rounded-2xl py-3 text-sm text-gray-500 font-medium active:bg-gray-50">
-                      <ImageIcon size={15} className="text-gray-400" strokeWidth={1.8} /> Galería
-                    </button>
-                    <button type="button" onClick={() => {
-                      if (fileInputRef.current) {
-                        fileInputRef.current.setAttribute('capture', 'environment')
-                        fileInputRef.current.click()
-                        setTimeout(() => fileInputRef.current?.removeAttribute('capture'), 500)
-                      }
-                    }} className="flex-1 flex items-center justify-center gap-1.5 border-2 border-dashed border-gray-300 rounded-2xl py-3 text-sm text-gray-500 font-medium active:bg-gray-50">
-                      <Camera size={15} className="text-gray-400" strokeWidth={1.8} /> Cámara
-                    </button>
-                  </div>
+                  <>
+                    {txEditId && txExistingReceipt && (
+                      <div className="flex items-center gap-2 mb-2 bg-orange-50 border border-orange-200 rounded-xl px-3 py-2">
+                        <Camera size={13} className="text-orange-500 flex-shrink-0" strokeWidth={2} />
+                        <span className="text-xs text-orange-700 font-medium flex-1">Recibo actual guardado</span>
+                        <button type="button" onClick={() => openReceipt(txExistingReceipt)}
+                          className="text-xs text-orange-600 font-bold active:opacity-60">
+                          Ver
+                        </button>
+                        <button type="button" onClick={() => setTxExistingReceipt(null)}
+                          className="text-orange-400 active:text-red-500 ml-1">
+                          <X size={13} strokeWidth={2.5} />
+                        </button>
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => fileInputRef.current?.click()}
+                        className="flex-1 flex items-center justify-center gap-1.5 border-2 border-dashed border-gray-300 rounded-2xl py-3 text-sm text-gray-500 font-medium active:bg-gray-50">
+                        <ImageIcon size={15} className="text-gray-400" strokeWidth={1.8} />
+                        {txEditId && txExistingReceipt ? 'Reemplazar' : 'Galería'}
+                      </button>
+                      <button type="button" onClick={() => {
+                        if (fileInputRef.current) {
+                          fileInputRef.current.setAttribute('capture', 'environment')
+                          fileInputRef.current.click()
+                          setTimeout(() => fileInputRef.current?.removeAttribute('capture'), 500)
+                        }
+                      }} className="flex-1 flex items-center justify-center gap-1.5 border-2 border-dashed border-gray-300 rounded-2xl py-3 text-sm text-gray-500 font-medium active:bg-gray-50">
+                        <Camera size={15} className="text-gray-400" strokeWidth={1.8} /> Cámara
+                      </button>
+                    </div>
+                  </>
                 )}
                 <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleTxFile} />
               </div>
@@ -857,7 +972,7 @@ export default function BusinessDetailPage() {
                     txType === 'compra'  ? 'bg-blue-500'    :
                     txType === 'gasto'   ? 'bg-red-500'     : 'bg-green-500'
                   }`}>
-                  {txSaving ? 'Guardando…' : `Guardar ${TX_LABEL[txType].toLowerCase()}`}
+                  {txSaving ? 'Guardando…' : txEditId ? `Actualizar ${TX_LABEL[txType].toLowerCase()}` : `Guardar ${TX_LABEL[txType].toLowerCase()}`}
                 </button>
               </div>
             </div>
