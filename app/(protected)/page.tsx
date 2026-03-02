@@ -173,12 +173,15 @@ export default async function DashboardPage() {
             <span className="text-xl">✅</span>
           </div>
         ) : (
-          <>
+          <Link href="/balance" className="block active:opacity-80">
             <p className="text-sm opacity-75 mb-0.5">
               {memberName(debtor?.user_id)} le debe a {memberName(creditor?.user_id)}
             </p>
-            <p className="text-4xl font-black tracking-tight leading-none mb-1">{currency(diff)}</p>
-          </>
+            <div className="flex items-end gap-2 mb-1">
+              <p className="text-4xl font-black tracking-tight leading-none">{currency(diff)}</p>
+              <p className="text-xs opacity-50 mb-1">Ver detalle →</p>
+            </div>
+          </Link>
         )}
 
         {/* Por miembro */}
