@@ -61,7 +61,7 @@ export default function ProfilePage() {
         const other = (mems ?? []).find(m => m.user_id !== user.id)
         if (other) setToUser(other.user_id)
         const { data: settles } = await supabase.from('settlements').select('*')
-          .eq('family_id', profile.family_id).gte('date', monthFirst()).lte('date', monthLast())
+          .eq('family_id', profile.family_id)
           .order('created_at', { ascending: false })
         setSettlements(settles ?? [])
       }
@@ -217,7 +217,7 @@ export default function ProfilePage() {
           </div>
 
           {settlements.length === 0 ? (
-            <p className="text-xs text-gray-400 text-center py-3">Sin pagos este mes.</p>
+            <p className="text-xs text-gray-400 text-center py-3">Sin pagos registrados.</p>
           ) : (
             <div className="space-y-2">
               {settlements.map(s => (

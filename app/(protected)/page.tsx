@@ -38,73 +38,98 @@ export default async function DashboardPage() {
     { data: fixedPayments },
     { data: shopItems },
     { data: incomes },
+    { data: allExpenses },
+    { data: allIncomes },
   ] = await Promise.all([
     supabase.from('profiles').select('user_id, display_name').eq('family_id', familyId),
+    // Current month — for display stats and recent activity
     supabase.from('expenses')
       .select('id, title, amount, date, category, paid_by')
       .eq('family_id', familyId).gte('date', first).lte('date', last)
       .order('date', { ascending: false }).order('created_at', { ascending: false }),
+    // All time — settlements never expire until explicitly registered
     supabase.from('settlements').select('from_user, to_user, amount')
-      .eq('family_id', familyId).gte('date', first).lte('date', last),
+      .eq('family_id', familyId),
     supabase.from('fixed_expenses').select('id, name, amount, due_day')
       .eq('family_id', familyId).eq('is_active', true),
     supabase.from('fixed_expense_payments').select('fixed_expense_id')
       .eq('family_id', familyId).eq('month', first),
     supabase.from('shopping_items').select('id')
       .eq('family_id', familyId).eq('bought', false),
+    // Current month — for display stats
     supabase.from('incomes')
       .select('id, title, amount, date, received_by, split_mode, for_member')
       .eq('family_id', familyId).gte('date', first).lte('date', last),
+    // All time — for cumulative balance calculation
+    supabase.from('expenses')
+      .select('amount, paid_by, split_mode')
+      .eq('family_id', familyId),
+    supabase.from('incomes')
+      .select('amount, received_by, split_mode, for_member')
+      .eq('family_id', familyId),
   ])
 
-  const memberList   = members ?? []
-  const expenseList  = expenses ?? []
-  const settlList    = settlements ?? []
-  const fixedList    = fixedExpenses ?? []
-  const incomeList   = incomes ?? []
-  const paidFixedIds = new Set((fixedPayments ?? []).map(p => p.fixed_expense_id))
-  const shopCount    = (shopItems ?? []).length
+  const memberList      = members ?? []
+  const expenseList     = expenses ?? []
+  const settlList       = settlements ?? []
+  const fixedList       = fixedExpenses ?? []
+  const incomeList      = incomes ?? []
+  const allExpenseList  = allExpenses ?? []
+  const allIncomeList   = allIncomes ?? []
+  const paidFixedIds    = new Set((fixedPayments ?? []).map(p => p.fixed_expense_id))
+  const shopCount       = (shopItems ?? []).length
 
-  // ── Balance ────────────────────────────────────────────
+  // ── Stats del mes actual (para display) ───────────────
   const totalSpent  = expenseList.reduce((s, e) => s + Number(e.amount), 0)
   const totalIncome = incomeList.reduce((s, i) => s + Number(i.amount), 0)
   const memberCount = memberList.length || 1
-  const equalShare  = totalSpent / memberCount
 
   const paidMap: Record<string, number> = {}
   for (const e of expenseList) {
     paidMap[e.paid_by] = (paidMap[e.paid_by] ?? 0) + Number(e.amount)
   }
+
+  // ── Balance acumulado (todos los tiempos, hasta el último settlement) ──
+  // La deuda no se resetea al cambiar de mes — solo se salda con una liquidación.
   const balance: Record<string, number> = {}
-  for (const m of memberList) {
-    balance[m.user_id] = (paidMap[m.user_id] ?? 0) - equalShare
+  for (const m of memberList) balance[m.user_id] = 0
+
+  // Gastos (respetando split_mode)
+  for (const e of allExpenseList) {
+    const amt   = Number(e.amount)
+    const mode  = (e.split_mode ?? '50/50') as string
+    const other = memberList.find(m => m.user_id !== e.paid_by)?.user_id
+    if (!other) continue
+    if (mode === '50/50') {
+      balance[e.paid_by] = (balance[e.paid_by] ?? 0) + amt / 2
+      balance[other]     = (balance[other]     ?? 0) - amt / 2
+    } else if (mode === 'para_otro') {
+      balance[e.paid_by] = (balance[e.paid_by] ?? 0) + amt
+      balance[other]     = (balance[other]     ?? 0) - amt
+    }
+    // 'personal': no afecta el balance compartido
   }
-  // Ajustar balance por ingresos
-  // Lógica: quien RECIBIÓ el dinero lo tiene físicamente.
-  // Si es 50/50, le debe al resto su parte → su balance BAJA, el del resto SUBE.
-  // Si es personal, es solo suyo → no afecta el balance compartido.
-  // Si es para_otro, lo tiene quien recibió pero le pertenece al otro → receptor BAJA, otro SUBE.
-  for (const inc of incomeList) {
+
+  // Ingresos (lógica: quien RECIBIÓ lo tiene físicamente)
+  for (const inc of allIncomeList) {
     const amt = Number(inc.amount)
     if (inc.split_mode === '50/50') {
       const share = amt / memberCount
       for (const m of memberList) {
         if (m.user_id === inc.received_by) {
-          // Tiene el dinero de todos → debe devolver las partes ajenas
           balance[m.user_id] = (balance[m.user_id] ?? 0) - (amt - share)
         } else {
-          // Le corresponde su parte → se la deben
           balance[m.user_id] = (balance[m.user_id] ?? 0) + share
         }
       }
-    } else if (inc.split_mode === 'personal') {
-      // Ingreso solo para quien lo recibió, no afecta deudas compartidas
     } else if (inc.split_mode === 'para_otro' && inc.for_member) {
-      // Receptor tiene dinero ajeno → le debe al otro el total
       balance[inc.received_by] = (balance[inc.received_by] ?? 0) - amt
       balance[inc.for_member]  = (balance[inc.for_member]  ?? 0) + amt
     }
+    // 'personal': no afecta deudas compartidas
   }
+
+  // Liquidaciones acumuladas (todas, no solo del mes)
   for (const s of settlList) {
     balance[s.from_user] = (balance[s.from_user] ?? 0) + Number(s.amount)
     balance[s.to_user]   = (balance[s.to_user]   ?? 0) - Number(s.amount)
@@ -140,7 +165,7 @@ export default async function DashboardPage() {
 
       {/* ── A) Balance Card ───────────────────────────── */}
       <section className="bg-gradient-to-br from-blue-600 to-blue-700 rounded-2xl p-5 text-white shadow-md">
-        <p className="text-[11px] font-bold uppercase tracking-widest opacity-60 mb-2">Balance del mes</p>
+        <p className="text-[11px] font-bold uppercase tracking-widest opacity-60 mb-2">Balance actual</p>
 
         {isEven ? (
           <div className="flex items-center gap-2 mb-1">
