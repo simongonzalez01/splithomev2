@@ -5,6 +5,7 @@ import { AppModeProvider, useAppMode } from '@/contexts/AppModeContext'
 import BottomNav from '@/components/BottomNav'
 import FAB from '@/components/FAB'
 import ModeSwitch from '@/components/ModeSwitch'
+import NotificationBell from '@/components/NotificationBell'
 
 function ShellInner({ children }: { children: React.ReactNode }) {
   const { mode } = useAppMode()
@@ -19,7 +20,10 @@ function ShellInner({ children }: { children: React.ReactNode }) {
           </div>
           <span className="font-bold text-gray-900 text-[15px] tracking-tight">SplitHome</span>
         </div>
-        <ModeSwitch />
+        <div className="flex items-center gap-1">
+          <NotificationBell />
+          <ModeSwitch />
+        </div>
       </header>
 
       {/* Contenido principal */}

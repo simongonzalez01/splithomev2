@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { Copy, Check, LogOut, ChevronRight, X, Plus } from 'lucide-react'
+import { Copy, Check, LogOut, ChevronRight, X, Plus, Pencil, Save } from 'lucide-react'
 
 type Member = { user_id: string; display_name: string | null }
 type Settlement = { id: string; from_user: string; to_user: string; amount: number; date: string; note: string | null; created_by: string }
@@ -31,6 +31,11 @@ export default function ProfilePage() {
   const [copied,         setCopied]         = useState(false)
   const [isCreator,      setIsCreator]      = useState(false)
   const [removingMember, setRemovingMember] = useState<string | null>(null)
+
+  // Name edit
+  const [editingName, setEditingName] = useState(false)
+  const [nameInput,   setNameInput]   = useState('')
+  const [savingName,  setSavingName]  = useState(false)
 
   // Settlement form
   const [showSettle, setShowSettle] = useState(false)
@@ -69,6 +74,19 @@ export default function ProfilePage() {
     }
     init()
   }, [supabase])
+
+  async function handleSaveName() {
+    if (!userId || !nameInput.trim()) return
+    setSavingName(true)
+    // Update both display_name (family system) and full_name (partners system)
+    await supabase.from('profiles').upsert(
+      { id: userId, user_id: userId, full_name: nameInput.trim(), display_name: nameInput.trim() },
+      { onConflict: 'user_id' }
+    )
+    setDisplayName(nameInput.trim())
+    setEditingName(false)
+    setSavingName(false)
+  }
 
   async function handleLogout() {
     await supabase.auth.signOut()
@@ -130,9 +148,37 @@ export default function ProfilePage() {
           <div className="w-14 h-14 rounded-full bg-blue-100 flex items-center justify-center text-2xl font-bold text-blue-600 flex-shrink-0">
             {initials}
           </div>
-          <div className="min-w-0">
-            <p className="font-bold text-gray-900 text-lg truncate">{displayName || 'Sin nombre'}</p>
-            <p className="text-sm text-gray-400 truncate">{email}</p>
+          <div className="flex-1 min-w-0">
+            {editingName ? (
+              <div className="flex items-center gap-2">
+                <input
+                  autoFocus
+                  value={nameInput}
+                  onChange={e => setNameInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleSaveName()}
+                  placeholder="Tu nombre"
+                  className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                />
+                <button onClick={handleSaveName} disabled={savingName}
+                  className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center flex-shrink-0 disabled:opacity-50">
+                  <Save size={13} className="text-white" />
+                </button>
+                <button onClick={() => setEditingName(false)}
+                  className="w-8 h-8 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0">
+                  <X size={13} className="text-gray-500" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <p className="font-bold text-gray-900 text-lg truncate">{displayName || 'Sin nombre'}</p>
+                <button
+                  onClick={() => { setNameInput(displayName); setEditingName(true) }}
+                  className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
+                  <Pencil size={12} className="text-gray-400" />
+                </button>
+              </div>
+            )}
+            <p className="text-sm text-gray-400 truncate mt-0.5">{email}</p>
           </div>
         </div>
       </section>
