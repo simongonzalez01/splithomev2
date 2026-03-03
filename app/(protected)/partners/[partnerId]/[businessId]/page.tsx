@@ -37,6 +37,13 @@ type CapitalEntry = {
   amount: number; description: string | null; date: string
 }
 type Member = { id: string; user_id: string; role: string; profit_share: number; profile?: Profile }
+type Exchange = {
+  id: string; business_id: string; sent_by: string | null
+  amount_sent: number; currency_sent: string
+  amount_received: number; currency_received: string
+  exchange_rate: number | null; method: string | null
+  date: string; notes: string | null; receipt_url: string | null; status: string | null
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 const fmt  = (n: number) => '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -74,6 +81,7 @@ export default function PartnerBusinessPage() {
   const [txs,      setTxs]      = useState<Transaction[]>([])
   const [capital,  setCapital]  = useState<CapitalEntry[]>([])
   const [members,  setMembers]  = useState<Member[]>([])
+  const [exchanges, setExchanges] = useState<Exchange[]>([])
   const [loading,  setLoading]  = useState(true)
 
   const [tab, setTab] = useState<'dashboard' | 'inventario' | 'movimientos' | 'socios'>('dashboard')
@@ -134,6 +142,20 @@ export default function PartnerBusinessPage() {
   const [capSaving,   setCapSaving]   = useState(false)
   const [capError,    setCapError]    = useState('')
 
+  // ── Exchange form (cambio businesses)
+  const [showExForm,  setShowExForm]  = useState(false)
+  const [exEditId,    setExEditId]    = useState<string | null>(null)
+  const [exCurrSent,  setExCurrSent]  = useState('USD')
+  const [exAmtSent,   setExAmtSent]   = useState('')
+  const [exCurrRecv,  setExCurrRecv]  = useState('ARS')
+  const [exAmtRecv,   setExAmtRecv]   = useState('')
+  const [exRate,      setExRate]      = useState('')
+  const [exMethod,    setExMethod]    = useState('efectivo')
+  const [exDate,      setExDate]      = useState(today())
+  const [exNotes,     setExNotes]     = useState('')
+  const [exSaving,    setExSaving]    = useState(false)
+  const [exError,     setExError]     = useState('')
+
   // ─── Load ───────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -179,6 +201,13 @@ export default function PartnerBusinessPage() {
       .eq('business_id', businessId).order('date', { ascending: false })
     setCapital((cap ?? []) as CapitalEntry[])
 
+    // Exchanges (cambio businesses)
+    if (biz.type === 'cambio') {
+      const { data: exs } = await supabase.from('business_exchanges').select('*')
+        .eq('business_id', businessId).order('date', { ascending: false })
+      setExchanges((exs ?? []) as Exchange[])
+    }
+
     // Members with profiles
     const { data: mems } = await supabase.from('business_members').select('*').eq('business_id', businessId)
     if (mems && mems.length > 0) {
@@ -215,6 +244,29 @@ export default function PartnerBusinessPage() {
   }, [txs, products])
 
   const lowStock = products.filter(p => Number(p.stock) <= Number(p.min_stock) && Number(p.min_stock) > 0)
+
+  // Cambio metrics
+  const cambioMetrics = useMemo(() => {
+    if (!business || business.type !== 'cambio') return null
+    const todayStr = new Date().toISOString().split('T')[0]
+    const mStr = mStart()
+    const todayExs  = exchanges.filter(e => e.date === todayStr)
+    const monthExs  = exchanges.filter(e => e.date.startsWith(mStr))
+    const byPair: Record<string, { sent: number; recv: number; count: number }> = {}
+    for (const e of monthExs) {
+      const key = `${e.currency_sent}→${e.currency_received}`
+      if (!byPair[key]) byPair[key] = { sent: 0, recv: 0, count: 0 }
+      byPair[key].sent += Number(e.amount_sent)
+      byPair[key].recv += Number(e.amount_received)
+      byPair[key].count++
+    }
+    return { todayCount: todayExs.length, monthCount: monthExs.length, totalCount: exchanges.length, byPair }
+  }, [exchanges, business])
+
+  // Filtered exchanges
+  const filteredExchanges = useMemo(() =>
+    exchanges.filter(e => !filterMonth || e.date.startsWith(filterMonth))
+  , [exchanges, filterMonth])
 
   // Capital metrics
   const myCapTotal      = capital.filter(c => c.contributed_by === userId).reduce((s, c) => s + Number(c.amount), 0)
@@ -468,6 +520,53 @@ export default function PartnerBusinessPage() {
     await load()
   }
 
+  // ─── Exchange handlers ────────────────────────────────────────────────────
+  function openAddExchange() {
+    setExEditId(null); setExCurrSent('USD'); setExAmtSent(''); setExCurrRecv('ARS')
+    setExAmtRecv(''); setExRate(''); setExMethod('efectivo'); setExDate(today())
+    setExNotes(''); setExError(''); setShowExForm(true)
+  }
+
+  function openEditExchange(e: Exchange) {
+    setExEditId(e.id); setExCurrSent(e.currency_sent); setExAmtSent(String(e.amount_sent))
+    setExCurrRecv(e.currency_received); setExAmtRecv(String(e.amount_received))
+    setExRate(e.exchange_rate ? String(e.exchange_rate) : '')
+    setExMethod(e.method ?? 'efectivo'); setExDate(e.date)
+    setExNotes(e.notes ?? ''); setExError(''); setShowExForm(true)
+  }
+
+  async function handleSaveExchange(ev: React.FormEvent) {
+    ev.preventDefault(); setExError('')
+    const amtSent = parseFloat(exAmtSent)
+    const amtRecv = parseFloat(exAmtRecv)
+    if (!amtSent || amtSent <= 0) { setExError('Monto entregado inválido'); return }
+    if (!amtRecv || amtRecv <= 0) { setExError('Monto recibido inválido'); return }
+    const rate = parseFloat(exRate) || Math.round((amtRecv / amtSent) * 10000) / 10000
+    setExSaving(true)
+    const payload = {
+      business_id: businessId, sent_by: userId,
+      amount_sent: amtSent, currency_sent: exCurrSent.toUpperCase().trim(),
+      amount_received: amtRecv, currency_received: exCurrRecv.toUpperCase().trim(),
+      exchange_rate: rate, method: exMethod, date: exDate,
+      notes: exNotes.trim() || null, status: 'completada',
+    }
+    if (exEditId) {
+      const { error } = await supabase.from('business_exchanges').update(payload).eq('id', exEditId)
+      if (error) { setExError(error.message); setExSaving(false); return }
+    } else {
+      const { error } = await supabase.from('business_exchanges').insert(payload)
+      if (error) { setExError(error.message); setExSaving(false); return }
+    }
+    setExSaving(false); setShowExForm(false); await load()
+  }
+
+  async function handleDeleteExchange(e: Exchange) {
+    if (e.sent_by && e.sent_by !== userId) { alert('Solo puedes eliminar tus propias operaciones.'); return }
+    if (!confirm('¿Eliminar esta operación de cambio?')) return
+    await supabase.from('business_exchanges').delete().eq('id', e.id)
+    await load()
+  }
+
   // ─── File handling ────────────────────────────────────────────────────────
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -535,91 +634,175 @@ export default function PartnerBusinessPage() {
       {/* ══════════════ DASHBOARD ══════════════ */}
       {tab === 'dashboard' && (
         <div className="px-4 space-y-3 pb-6">
-          {/* Resumen financiero */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Balance caja</p>
-              <p className={`text-xl font-bold ${metrics.cashBalance >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                {metrics.cashBalance < 0 ? '-' : ''}{fmt(metrics.cashBalance)}
-              </p>
-            </div>
-            {business.type === 'ventas' && (
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Inventario</p>
-                <p className="text-xl font-bold text-blue-600">{fmt(metrics.inventoryValue)}</p>
-              </div>
-            )}
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Ganancia mes</p>
-              <p className={`text-xl font-bold ${metrics.monthProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                {metrics.monthProfit < 0 ? '-' : ''}{fmt(metrics.monthProfit)}
-              </p>
-            </div>
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Ganancia total</p>
-              <p className={`text-xl font-bold ${netProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                {netProfit < 0 ? '-' : ''}{fmt(netProfit)}
-              </p>
-            </div>
-          </div>
 
-          {/* Pendientes de cobro */}
-          {metrics.pendingCredit.length > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3.5">
-              <div className="flex items-center gap-2 mb-1">
-                <Clock size={16} className="text-amber-500" />
-                <p className="text-sm font-bold text-amber-700">Ventas por cobrar</p>
+          {/* ── VENTAS: financial summary ─────────────────────────────────── */}
+          {business.type === 'ventas' && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Balance caja</p>
+                  <p className={`text-xl font-bold ${metrics.cashBalance >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {metrics.cashBalance < 0 ? '-' : ''}{fmt(metrics.cashBalance)}
+                  </p>
+                </div>
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Inventario</p>
+                  <p className="text-xl font-bold text-blue-600">{fmt(metrics.inventoryValue)}</p>
+                </div>
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Ganancia mes</p>
+                  <p className={`text-xl font-bold ${metrics.monthProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {metrics.monthProfit < 0 ? '-' : ''}{fmt(metrics.monthProfit)}
+                  </p>
+                </div>
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Ganancia total</p>
+                  <p className={`text-xl font-bold ${netProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {netProfit < 0 ? '-' : ''}{fmt(netProfit)}
+                  </p>
+                </div>
               </div>
-              <p className="text-xs text-amber-600">
-                {metrics.pendingCredit.length} venta{metrics.pendingCredit.length !== 1 ? 's' : ''} pendiente{metrics.pendingCredit.length !== 1 ? 's' : ''} · {fmt(metrics.pendingTotal)} por cobrar
-              </p>
-              <button onClick={() => { setTab('movimientos'); setFilterType('venta') }}
-                className="text-xs font-bold text-amber-700 mt-1.5 underline">Ver ventas →</button>
-            </div>
-          )}
 
-          {/* Bajo stock */}
-          {business.type === 'ventas' && lowStock.length > 0 && (
-            <div className="bg-red-50 border border-red-200 rounded-2xl px-4 py-3.5">
-              <div className="flex items-center gap-2 mb-1">
-                <AlertTriangle size={16} className="text-red-400" />
-                <p className="text-sm font-bold text-red-600">Stock bajo</p>
-              </div>
-              <p className="text-xs text-red-500">{lowStock.map(p => p.name).join(', ')}</p>
-            </div>
-          )}
-
-          {/* Mi ganancia */}
-          {!isPending && totalCap > 0 && (
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Distribución de ganancia</p>
-              <div className="space-y-2">
-                {[
-                  { label: 'Tu ganancia', amount: myProfitShare, pct: isOwner ? ownerShare : memberProfitShare },
-                  { label: displayName(partner), amount: partnerProfitAmt, pct: partnerProfitShare },
-                ].map(row => (
-                  <div key={row.label} className="flex items-center justify-between">
-                    <div className="flex-1 min-w-0">
-                      <span className="text-sm text-gray-600 truncate block">{row.label}</span>
-                      <span className="text-[10px] text-gray-400">{row.pct}%</span>
-                    </div>
-                    <span className={`font-bold text-sm ml-3 ${row.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                      {fmt(row.amount)}
-                    </span>
+              {metrics.pendingCredit.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3.5">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Clock size={16} className="text-amber-500" />
+                    <p className="text-sm font-bold text-amber-700">Ventas por cobrar</p>
                   </div>
+                  <p className="text-xs text-amber-600">
+                    {metrics.pendingCredit.length} venta{metrics.pendingCredit.length !== 1 ? 's' : ''} pendiente{metrics.pendingCredit.length !== 1 ? 's' : ''} · {fmt(metrics.pendingTotal)} por cobrar
+                  </p>
+                  <button onClick={() => { setTab('movimientos'); setFilterType('venta') }}
+                    className="text-xs font-bold text-amber-700 mt-1.5 underline">Ver ventas →</button>
+                </div>
+              )}
+
+              {lowStock.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-2xl px-4 py-3.5">
+                  <div className="flex items-center gap-2 mb-1">
+                    <AlertTriangle size={16} className="text-red-400" />
+                    <p className="text-sm font-bold text-red-600">Stock bajo</p>
+                  </div>
+                  <p className="text-xs text-red-500">{lowStock.map(p => p.name).join(', ')}</p>
+                </div>
+              )}
+
+              {!isPending && totalCap > 0 && (
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Distribución de ganancia</p>
+                  <div className="space-y-2">
+                    {[
+                      { label: 'Tu ganancia', amount: myProfitShare, pct: isOwner ? ownerShare : memberProfitShare },
+                      { label: displayName(partner), amount: partnerProfitAmt, pct: partnerProfitShare },
+                    ].map(row => (
+                      <div key={row.label} className="flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm text-gray-600 truncate block">{row.label}</span>
+                          <span className="text-[10px] text-gray-400">{row.pct}%</span>
+                        </div>
+                        <span className={`font-bold text-sm ml-3 ${row.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                          {fmt(row.amount)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                {(['venta', 'gasto', 'compra', 'ingreso'] as const).map(type => (
+                  <button key={type} onClick={() => { setTab('movimientos'); openAddTx(type) }}
+                    className={`${TX_BG[type]} rounded-2xl px-4 py-3.5 text-left active:opacity-80`}>
+                    <p className={`text-xs font-bold ${TX_COLORS[type]}`}>+ {TX_LABEL[type]}</p>
+                  </button>
                 ))}
               </div>
-            </div>
+            </>
           )}
 
-          {/* Quick add */}
-          <div className="grid grid-cols-2 gap-2 pt-1">
-            {(['venta', 'gasto', 'compra', 'ingreso'] as const).map(type => (
-              <button key={type} onClick={() => { setTab('movimientos'); openAddTx(type) }}
-                className={`${TX_BG[type]} rounded-2xl px-4 py-3.5 text-left active:opacity-80`}>
-                <p className={`text-xs font-bold ${TX_COLORS[type]}`}>+ {TX_LABEL[type]}</p>
+          {/* ── CAMBIO: exchange summary ──────────────────────────────────── */}
+          {business.type === 'cambio' && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5 text-center">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Hoy</p>
+                  <p className="text-3xl font-black text-gray-900">{cambioMetrics?.todayCount ?? 0}</p>
+                  <p className="text-[10px] text-gray-400">operaciones</p>
+                </div>
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5 text-center">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Este mes</p>
+                  <p className="text-3xl font-black text-gray-900">{cambioMetrics?.monthCount ?? 0}</p>
+                  <p className="text-[10px] text-gray-400">operaciones</p>
+                </div>
+              </div>
+
+              {cambioMetrics && Object.keys(cambioMetrics.byPair).length > 0 && (
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4 space-y-3">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Flujo del mes</p>
+                  {Object.entries(cambioMetrics.byPair).map(([pair, data]) => (
+                    <div key={pair} className="flex items-center justify-between">
+                      <span className="text-sm font-bold text-gray-800">{pair}</span>
+                      <div className="text-right">
+                        <p className="text-xs font-semibold text-gray-600">{data.count} op{data.count !== 1 ? 's' : ''}</p>
+                        <p className="text-[10px] text-gray-400">
+                          Tasa ≈ {data.sent > 0 ? (data.recv / data.sent).toFixed(2) : '—'}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!isPending && totalCap > 0 && (
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Distribución de ganancia</p>
+                  <div className="space-y-2">
+                    {[
+                      { label: 'Tu parte', amount: myProfitShare, pct: isOwner ? ownerShare : memberProfitShare },
+                      { label: displayName(partner), amount: partnerProfitAmt, pct: partnerProfitShare },
+                    ].map(row => (
+                      <div key={row.label} className="flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm text-gray-600 truncate block">{row.label}</span>
+                          <span className="text-[10px] text-gray-400">{row.pct}%</span>
+                        </div>
+                        <span className={`font-bold text-sm ml-3 ${row.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                          {fmt(row.amount)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={() => { setTab('movimientos'); openAddExchange() }}
+                className="w-full py-4 rounded-2xl font-bold text-white text-sm flex items-center justify-center gap-2 active:opacity-90"
+                style={{ backgroundColor: business.color }}
+              >
+                <Plus size={16} strokeWidth={2.5} /> Nueva operación de cambio
               </button>
-            ))}
+            </>
+          )}
+
+          {/* ── Chat + Tareas — visible for ALL business types ─────────────── */}
+          <div className="grid grid-cols-2 gap-3">
+            <a href={`/partners/${partnerId}/${businessId}/chat`}
+              className="bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3.5 flex items-center gap-2 active:opacity-80">
+              <span className="text-xl">💬</span>
+              <div>
+                <p className="text-sm font-bold text-blue-700">Chat</p>
+                <p className="text-xs text-gray-400">Mensajes</p>
+              </div>
+            </a>
+            <a href={`/partners/${partnerId}/${businessId}/todos`}
+              className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3.5 flex items-center gap-2 active:opacity-80">
+              <span className="text-xl">✅</span>
+              <div>
+                <p className="text-sm font-bold text-emerald-700">Tareas</p>
+                <p className="text-xs text-gray-400">Pendientes</p>
+              </div>
+            </a>
           </div>
         </div>
       )}
@@ -672,8 +855,8 @@ export default function PartnerBusinessPage() {
         </div>
       )}
 
-      {/* ══════════════ MOVIMIENTOS ══════════════ */}
-      {tab === 'movimientos' && (
+      {/* ══════════════ MOVIMIENTOS (VENTAS) ══════════════ */}
+      {tab === 'movimientos' && business.type === 'ventas' && (
         <div className="px-4 pb-6">
           {/* Controls */}
           <div className="flex gap-2 mb-3">
@@ -788,6 +971,80 @@ export default function PartnerBusinessPage() {
                           <button onClick={e => { e.stopPropagation(); handleDeleteTx(t) }}
                             className="text-gray-300 p-0.5"><Trash2 size={12} /></button>
                         </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══════════════ MOVIMIENTOS (CAMBIO) ══════════════ */}
+      {tab === 'movimientos' && business.type === 'cambio' && (
+        <div className="px-4 pb-6">
+          <div className="flex gap-2 mb-4">
+            <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)}
+              className="flex-1 bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+            <button onClick={openAddExchange}
+              className="text-white rounded-xl px-4 py-2 flex items-center gap-1.5 text-sm font-bold"
+              style={{ backgroundColor: business.color }}>
+              <Plus size={15} strokeWidth={2.5} /> Nueva
+            </button>
+          </div>
+
+          {filteredExchanges.length === 0 ? (
+            <div className="text-center py-12">
+              <ArrowLeftRight size={32} className="text-gray-200 mx-auto mb-3" />
+              <p className="text-sm text-gray-400">Sin operaciones de cambio</p>
+              <button onClick={openAddExchange}
+                className="mt-4 px-5 py-2.5 text-sm font-bold rounded-2xl text-white"
+                style={{ backgroundColor: business.color }}>
+                + Registrar primera operación
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filteredExchanges.map(ex => {
+                const isMine = !ex.sent_by || ex.sent_by === userId
+                const impliedRate = Number(ex.amount_sent) > 0
+                  ? Number(ex.amount_received) / Number(ex.amount_sent)
+                  : 0
+                return (
+                  <div key={ex.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
+                        style={{ backgroundColor: business.color + '18' }}>
+                        <ArrowLeftRight size={16} style={{ color: business.color }} strokeWidth={2} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-baseline gap-1.5 flex-wrap">
+                          <span className="font-bold text-gray-900 text-[15px]">
+                            {Number(ex.amount_sent).toLocaleString()}
+                            <span className="text-xs font-semibold text-gray-500 ml-0.5">{ex.currency_sent}</span>
+                          </span>
+                          <span className="text-gray-400 text-sm">→</span>
+                          <span className="font-bold text-[15px]" style={{ color: business.color }}>
+                            {Number(ex.amount_received).toLocaleString()}
+                            <span className="text-xs font-semibold ml-0.5">{ex.currency_received}</span>
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          {fmtDate(ex.date)}
+                          {' · '}tasa {(ex.exchange_rate ?? impliedRate).toFixed(2)}
+                          {ex.method ? ` · ${ex.method}` : ''}
+                          {!isMine ? ` · ${displayName(partner)}` : ''}
+                          {ex.notes ? ` · ${ex.notes}` : ''}
+                        </p>
+                      </div>
+                      <div className="flex gap-0.5 flex-shrink-0">
+                        <button onClick={() => openEditExchange(ex)} className="text-gray-300 p-1.5">
+                          <Pencil size={13} />
+                        </button>
+                        <button onClick={() => handleDeleteExchange(ex)} className="text-gray-300 p-1.5">
+                          <Trash2 size={13} />
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1338,6 +1595,117 @@ export default function PartnerBusinessPage() {
               <button form="cap-form" type="submit" disabled={capSaving}
                 className="flex-1 bg-orange-500 disabled:opacity-60 text-white font-bold py-4 rounded-2xl text-[15px] shadow-sm">
                 {capSaving ? 'Guardando…' : 'Registrar aporte'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════ MODAL: Operación de cambio ══════════════ */}
+      {showExForm && business.type === 'cambio' && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowExForm(false)}>
+          <div className="bg-white w-full rounded-t-3xl shadow-2xl flex flex-col" style={{ maxHeight: '90vh' }}
+            onClick={e => e.stopPropagation()}>
+            <div className="flex-shrink-0 px-5 pt-3 pb-2">
+              <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3" />
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-gray-900">
+                  {exEditId ? 'Editar' : 'Nueva'} operación de cambio
+                </h2>
+                <button onClick={() => setShowExForm(false)} className="p-1 text-gray-400"><X size={20} /></button>
+              </div>
+            </div>
+
+            <form id="ex-form" onSubmit={handleSaveExchange} className="flex-1 overflow-y-auto px-5 pt-2 pb-4 space-y-4">
+              {exError && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-xl">{exError}</p>}
+
+              {/* El cliente entrega */}
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">
+                  El cliente entrega
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="number" required min="0.01" step="any" placeholder="0.00"
+                    value={exAmtSent} onChange={e => setExAmtSent(e.target.value)}
+                    className="flex-1 bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                  <select
+                    value={exCurrSent} onChange={e => setExCurrSent(e.target.value)}
+                    className="w-24 bg-gray-50 border border-gray-200 rounded-2xl px-2 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  >
+                    {['USD','ARS','BRL','EUR','PYG','BOB','UYU','CLP'].map(c => <option key={c}>{c}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* El cliente recibe */}
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">
+                  El cliente recibe
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="number" required min="0.01" step="any" placeholder="0.00"
+                    value={exAmtRecv} onChange={e => setExAmtRecv(e.target.value)}
+                    className="flex-1 bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                  <select
+                    value={exCurrRecv} onChange={e => setExCurrRecv(e.target.value)}
+                    className="w-24 bg-gray-50 border border-gray-200 rounded-2xl px-2 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  >
+                    {['ARS','USD','BRL','EUR','PYG','BOB','UYU','CLP'].map(c => <option key={c}>{c}</option>)}
+                  </select>
+                </div>
+                {exAmtSent && exAmtRecv && parseFloat(exAmtSent) > 0 && (
+                  <p className="text-xs text-gray-400 mt-1.5 ml-1">
+                    Tasa implícita: {(parseFloat(exAmtRecv) / parseFloat(exAmtSent)).toFixed(4)} {exCurrRecv}/{exCurrSent}
+                  </p>
+                )}
+              </div>
+
+              {/* Método */}
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">Método</label>
+                <div className="flex gap-2 flex-wrap">
+                  {['efectivo', 'transferencia', 'tarjeta'].map(m => (
+                    <button key={m} type="button" onClick={() => setExMethod(m)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize transition-all ${
+                        exMethod === m ? 'text-white' : 'bg-gray-100 text-gray-500'
+                      }`}
+                      style={exMethod === m ? { backgroundColor: business.color } : {}}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Fecha + Notas */}
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Fecha</label>
+                  <input type="date" required value={exDate} onChange={e => setExDate(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                </div>
+                <div className="flex-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Notas</label>
+                  <input type="text" placeholder="Opcional" value={exNotes} onChange={e => setExNotes(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                </div>
+              </div>
+            </form>
+
+            <div className="flex-shrink-0 px-5 py-4 border-t border-gray-100 flex gap-2"
+              style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
+              <button type="button" onClick={() => setShowExForm(false)}
+                className="w-24 border-2 border-gray-200 text-gray-600 font-semibold py-4 rounded-2xl text-sm flex-shrink-0">
+                Cancelar
+              </button>
+              <button form="ex-form" type="submit" disabled={exSaving}
+                className="flex-1 text-white font-bold py-4 rounded-2xl text-[15px] shadow-sm disabled:opacity-60"
+                style={{ backgroundColor: business.color }}>
+                {exSaving ? 'Guardando…' : exEditId ? 'Actualizar' : 'Registrar operación'}
               </button>
             </div>
           </div>
