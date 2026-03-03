@@ -1,0 +1,1327 @@
+'use client'
+
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { useParams, useRouter } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
+import {
+  ArrowLeft, Plus, X, Pencil, Trash2, TrendingUp, TrendingDown,
+  Package, DollarSign, AlertTriangle, Camera, Image as ImageIcon,
+  Check, Users, ShieldCheck, Clock, CreditCard, ChevronDown,
+  Store, ArrowLeftRight, Wallet,
+} from 'lucide-react'
+
+// ─── Types ─────────────────────────────────────────────────────────────────────
+type Business = {
+  id: string; name: string; description: string | null
+  color: string; type: 'ventas' | 'cambio'; user_id: string
+}
+type Profile = { id: string; email: string | null; full_name: string | null }
+type Product = {
+  id: string; name: string; unit: string
+  cost_price: number; sale_price: number
+  stock: number; min_stock: number; is_active: boolean
+}
+type TxItem = { product_id: string; quantity: number; unit_price: number; subtotal: number }
+type Transaction = {
+  id: string
+  type: 'venta' | 'compra' | 'gasto' | 'ingreso' | 'retiro'
+  total: number; description: string | null; date: string
+  receipt_url: string | null; notes: string | null; created_at: string
+  created_by: string | null; verified_by: string | null; verified_at: string | null
+  payment_type: 'contado' | 'credito' | null
+  amount_paid: number | null; client_name: string | null
+}
+type TxPayment = { id: string; amount: number; date: string; notes: string | null }
+type CapitalEntry = {
+  id: string; contributed_by: string
+  amount: number; description: string | null; date: string
+}
+type Member = { id: string; user_id: string; role: string; profit_share: number; profile?: Profile }
+
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+const fmt  = (n: number) => '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const today = () => new Date().toISOString().split('T')[0]
+const mStart = () => new Date().toISOString().slice(0, 7)
+const fmtDate = (s: string) =>
+  new Date(s + 'T12:00:00').toLocaleDateString('es', { weekday: 'short', day: 'numeric', month: 'short' })
+const displayName = (p: Profile | null | undefined) => p?.full_name || p?.email || 'Socio'
+const initials = (p: Profile | null | undefined) => (p?.full_name || p?.email || 'S').slice(0, 2).toUpperCase()
+
+const TX_COLORS: Record<string, string> = {
+  venta: 'text-emerald-600', compra: 'text-blue-600',
+  ingreso: 'text-emerald-500', gasto: 'text-red-500', retiro: 'text-purple-500',
+}
+const TX_BG: Record<string, string> = {
+  venta: 'bg-emerald-50', compra: 'bg-blue-50',
+  ingreso: 'bg-green-50', gasto: 'bg-red-50', retiro: 'bg-purple-50',
+}
+const TX_LABEL: Record<string, string> = {
+  venta: 'Venta', compra: 'Compra', ingreso: 'Ingreso', gasto: 'Gasto', retiro: 'Retiro',
+}
+
+// ─── Main Component ─────────────────────────────────────────────────────────────
+export default function PartnerBusinessPage() {
+  const supabase = createClient()
+  const { partnerId, businessId } = useParams<{ partnerId: string; businessId: string }>()
+  const router = useRouter()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const [userId,   setUserId]   = useState<string | null>(null)
+  const [isOwner,  setIsOwner]  = useState(false)
+  const [business, setBusiness] = useState<Business | null>(null)
+  const [partner,  setPartner]  = useState<Profile | null>(null)
+  const [products, setProducts] = useState<Product[]>([])
+  const [txs,      setTxs]      = useState<Transaction[]>([])
+  const [capital,  setCapital]  = useState<CapitalEntry[]>([])
+  const [members,  setMembers]  = useState<Member[]>([])
+  const [loading,  setLoading]  = useState(true)
+
+  const [tab, setTab] = useState<'dashboard' | 'inventario' | 'movimientos' | 'socios'>('dashboard')
+
+  // Filters
+  const [filterMonth, setFilterMonth] = useState(mStart())
+  const [filterType,  setFilterType]  = useState('')
+
+  // ── Product form
+  const [showProdForm, setShowProdForm] = useState(false)
+  const [pEditId,  setPEditId]  = useState<string | null>(null)
+  const [pName,    setPName]    = useState('')
+  const [pUnit,    setPUnit]    = useState('unidad')
+  const [pCost,    setPCost]    = useState('')
+  const [pSale,    setPSale]    = useState('')
+  const [pStock,   setPStock]   = useState('0')
+  const [pMin,     setPMin]     = useState('0')
+  const [pSaving,  setPSaving]  = useState(false)
+  const [pError,   setPError]   = useState('')
+
+  // ── Transaction form
+  const [showTxForm,  setShowTxForm]  = useState(false)
+  const [txEditId,    setTxEditId]    = useState<string | null>(null)
+  const [txType,      setTxType]      = useState<Transaction['type']>('venta')
+  const [txDesc,      setTxDesc]      = useState('')
+  const [txDate,      setTxDate]      = useState(today())
+  const [txNotes,     setTxNotes]     = useState('')
+  const [txAmount,    setTxAmount]    = useState('')
+  const [txItems,     setTxItems]     = useState<{ product_id: string; qty: string; unit_price: string }[]>([])
+  const [txOrigItems, setTxOrigItems] = useState<TxItem[]>([])
+  const [txPayType,   setTxPayType]   = useState<'contado' | 'credito'>('contado')
+  const [txAmtPaid,   setTxAmtPaid]   = useState('')
+  const [txClient,    setTxClient]    = useState('')
+  const [txFile,      setTxFile]      = useState<File | null>(null)
+  const [txPreview,   setTxPreview]   = useState<string | null>(null)
+  const [txExistRec,  setTxExistRec]  = useState<string | null>(null)
+  const [txSaving,    setTxSaving]    = useState(false)
+  const [txError,     setTxError]     = useState('')
+
+  // ── View receipt
+  const [viewReceipt, setViewReceipt] = useState<string | null>(null)
+
+  // ── Credit payment modal
+  const [payTx,      setPayTx]      = useState<Transaction | null>(null)
+  const [payments,   setPayments]   = useState<TxPayment[]>([])
+  const [showPayForm, setShowPayForm] = useState(false)
+  const [payAmount,  setPayAmount]  = useState('')
+  const [payDate,    setPayDate]    = useState(today())
+  const [payNotes,   setPayNotes]   = useState('')
+  const [paySaving,  setPaySaving]  = useState(false)
+  const [payError,   setPayError]   = useState('')
+
+  // ── Capital form
+  const [showCapForm, setShowCapForm] = useState(false)
+  const [capAmount,   setCapAmount]   = useState('')
+  const [capDesc,     setCapDesc]     = useState('')
+  const [capDate,     setCapDate]     = useState(today())
+  const [capSaving,   setCapSaving]   = useState(false)
+  const [capError,    setCapError]    = useState('')
+
+  // ─── Load ───────────────────────────────────────────────────────────────────
+  const load = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    setUserId(user.id)
+
+    // Check access: owner or member
+    const { data: ownedBiz } = await supabase
+      .from('businesses').select('*').eq('id', businessId).eq('user_id', user.id).maybeSingle()
+
+    let biz: Business | null = ownedBiz as Business | null
+    let ownerFlag = !!ownedBiz
+
+    if (!biz) {
+      const { data: memberCheck } = await supabase
+        .from('business_members').select('id').eq('business_id', businessId).eq('user_id', user.id).maybeSingle()
+      if (!memberCheck) { router.push('/partners'); return }
+      const { data: memberBiz } = await supabase.from('businesses').select('*').eq('id', businessId).maybeSingle()
+      biz = memberBiz as Business | null
+    }
+    if (!biz) { router.push('/partners'); return }
+
+    setBusiness(biz)
+    setIsOwner(ownerFlag)
+
+    // Partner profile
+    if (partnerId !== 'pending') {
+      const { data: prof } = await supabase.from('profiles').select('id,email,full_name').eq('id', partnerId).maybeSingle()
+      setPartner(prof as Profile | null)
+    }
+
+    const [{ data: prods }, { data: transactions }] = await Promise.all([
+      supabase.from('business_products').select('*').eq('business_id', businessId).eq('is_active', true).order('name'),
+      supabase.from('business_transactions').select('*').eq('business_id', businessId)
+        .order('date', { ascending: false }).order('created_at', { ascending: false }),
+    ])
+
+    setProducts(prods ?? [])
+    setTxs((transactions ?? []) as Transaction[])
+
+    // Capital
+    const { data: cap } = await supabase.from('business_capital').select('*')
+      .eq('business_id', businessId).order('date', { ascending: false })
+    setCapital((cap ?? []) as CapitalEntry[])
+
+    // Members with profiles
+    const { data: mems } = await supabase.from('business_members').select('*').eq('business_id', businessId)
+    if (mems && mems.length > 0) {
+      const ids = mems.map((m: Member) => m.user_id)
+      const { data: profiles } = await supabase.from('profiles').select('id,email,full_name').in('id', ids)
+      const profileMap = Object.fromEntries((profiles ?? []).map((p: Profile) => [p.id, p]))
+      setMembers(mems.map((m: Member) => ({ ...m, profile: profileMap[m.user_id] })))
+    } else {
+      setMembers([])
+    }
+
+    setLoading(false)
+  }, [supabase, businessId, partnerId, router])
+
+  useEffect(() => { load() }, [load])
+
+  // ─── Metrics ─────────────────────────────────────────────────────────────
+  const metrics = useMemo(() => {
+    const cashIn  = txs.filter(t => t.type === 'venta' || t.type === 'ingreso')
+      .reduce((s, t) => s + (t.payment_type === 'credito' ? Number(t.amount_paid ?? 0) : Number(t.total)), 0)
+    const cashOut = txs.filter(t => t.type === 'compra' || t.type === 'gasto' || t.type === 'retiro')
+      .reduce((s, t) => s + Number(t.total), 0)
+    const invVal  = products.reduce((s, p) => s + Number(p.stock) * Number(p.cost_price), 0)
+    const m       = mStart()
+    const mTxs    = txs.filter(t => t.date.startsWith(m))
+    const mIn     = mTxs.filter(t => t.type === 'venta' || t.type === 'ingreso')
+      .reduce((s, t) => s + (t.payment_type === 'credito' ? Number(t.amount_paid ?? 0) : Number(t.total)), 0)
+    const mOut    = mTxs.filter(t => t.type === 'compra' || t.type === 'gasto')
+      .reduce((s, t) => s + Number(t.total), 0)
+    const pendingCredit = txs.filter(t => t.type === 'venta' && t.payment_type === 'credito'
+      && Number(t.amount_paid ?? 0) < Number(t.total))
+    const pendingTotal = pendingCredit.reduce((s, t) => s + (Number(t.total) - Number(t.amount_paid ?? 0)), 0)
+    return { cashBalance: cashIn - cashOut, inventoryValue: invVal, monthProfit: mIn - mOut, pendingCredit, pendingTotal }
+  }, [txs, products])
+
+  const lowStock = products.filter(p => Number(p.stock) <= Number(p.min_stock) && Number(p.min_stock) > 0)
+
+  // Capital metrics
+  const myCapTotal      = capital.filter(c => c.contributed_by === userId).reduce((s, c) => s + Number(c.amount), 0)
+  const partnerCapTotal = capital.filter(c => c.contributed_by === partnerId && partnerId !== 'pending')
+    .reduce((s, c) => s + Number(c.amount), 0)
+  const totalCap        = myCapTotal + partnerCapTotal
+
+  // Profit split
+  const memberProfitShare  = members.find(m => m.user_id === userId)?.profit_share ?? 50
+  const partnerProfitShare = members.find(m => m.user_id === partnerId)?.profit_share ??
+    members.find(m => m.user_id !== userId)?.profit_share ?? 50
+  const ownerShare = isOwner ? (100 - members.reduce((s, m) => s + m.profit_share, 0)) : memberProfitShare
+
+  const netProfit = txs
+    .filter(t => t.type === 'venta' || t.type === 'ingreso')
+    .reduce((s, t) => s + (t.payment_type === 'credito' ? Number(t.amount_paid ?? 0) : Number(t.total)), 0)
+    - txs.filter(t => t.type === 'compra' || t.type === 'gasto').reduce((s, t) => s + Number(t.total), 0)
+  const myProfitShare = netProfit * ((isOwner ? ownerShare : memberProfitShare) / 100)
+  const partnerProfitAmt = netProfit * (partnerProfitShare / 100)
+
+  // ─── Product handlers ────────────────────────────────────────────────────
+  function openAddProduct() {
+    setPEditId(null); setPName(''); setPUnit('unidad'); setPCost(''); setPSale('')
+    setPStock('0'); setPMin('0'); setPError(''); setShowProdForm(true)
+  }
+  function openEditProduct(p: Product) {
+    setPEditId(p.id); setPName(p.name); setPUnit(p.unit)
+    setPCost(String(p.cost_price)); setPSale(String(p.sale_price))
+    setPStock(String(p.stock)); setPMin(String(p.min_stock))
+    setPError(''); setShowProdForm(true)
+  }
+  async function handleSaveProduct(e: React.FormEvent) {
+    e.preventDefault(); setPError('')
+    if (!pName.trim()) { setPError('Nombre requerido'); return }
+    setPSaving(true)
+    const payload = { name: pName.trim(), unit: pUnit, cost_price: parseFloat(pCost) || 0, sale_price: parseFloat(pSale) || 0, stock: parseFloat(pStock) || 0, min_stock: parseFloat(pMin) || 0 }
+    if (pEditId) {
+      const { error } = await supabase.from('business_products').update(payload).eq('id', pEditId)
+      if (error) { setPError(error.message); setPSaving(false); return }
+    } else {
+      const { error } = await supabase.from('business_products').insert({ ...payload, business_id: businessId, user_id: userId, is_active: true })
+      if (error) { setPError(error.message); setPSaving(false); return }
+    }
+    setPSaving(false); setShowProdForm(false); await load()
+  }
+  async function handleDeleteProduct(p: Product) {
+    if (!confirm(`¿Desactivar "${p.name}"?`)) return
+    await supabase.from('business_products').update({ is_active: false }).eq('id', p.id)
+    await load()
+  }
+
+  // ─── Transaction handlers ────────────────────────────────────────────────
+  function openAddTx(type: Transaction['type'] = 'venta') {
+    setTxEditId(null); setTxOrigItems([]); setTxExistRec(null)
+    setTxType(type); setTxDesc(''); setTxDate(today()); setTxNotes('')
+    setTxPayType('contado'); setTxAmtPaid(''); setTxClient('')
+    setTxItems(type === 'venta' || type === 'compra'
+      ? [{ product_id: products[0]?.id ?? '', qty: '1', unit_price: '' }] : [])
+    setTxAmount(''); setTxFile(null); setTxPreview(null)
+    setTxError(''); setShowTxForm(true)
+  }
+
+  async function openEditTx(t: Transaction) {
+    setTxEditId(t.id); setTxType(t.type); setTxDesc(t.description ?? '')
+    setTxDate(t.date); setTxNotes(t.notes ?? '')
+    setTxPayType(t.payment_type ?? 'contado')
+    setTxAmtPaid(String(t.amount_paid ?? '')); setTxClient(t.client_name ?? '')
+    setTxFile(null); setTxPreview(null); setTxExistRec(t.receipt_url); setTxError('')
+    if (t.type === 'venta' || t.type === 'compra') {
+      const { data: items } = await supabase.from('business_tx_items')
+        .select('product_id,quantity,unit_price,subtotal').eq('transaction_id', t.id)
+      const orig = (items ?? []) as TxItem[]
+      setTxOrigItems(orig)
+      setTxItems(orig.map(i => ({ product_id: i.product_id, qty: String(i.quantity), unit_price: String(i.unit_price) })))
+      setTxAmount('')
+    } else {
+      setTxOrigItems([]); setTxItems([]); setTxAmount(String(t.total))
+    }
+    setShowTxForm(true)
+  }
+
+  async function handleSaveTx(e: React.FormEvent) {
+    e.preventDefault(); setTxError('')
+    const hasItems = txType === 'venta' || txType === 'compra'
+    const validItems = hasItems
+      ? txItems.filter(i => i.product_id && parseFloat(i.qty) > 0).map(i => {
+          const prod = products.find(p => p.id === i.product_id)
+          const qty  = parseFloat(i.qty)
+          const price = parseFloat(i.unit_price) || (txType === 'venta' ? Number(prod?.sale_price ?? 0) : Number(prod?.cost_price ?? 0))
+          return { product_id: i.product_id, quantity: qty, unit_price: price, subtotal: qty * price }
+        })
+      : []
+    if (hasItems && validItems.length === 0) { setTxError('Agrega al menos un producto'); return }
+    const total = hasItems ? validItems.reduce((s, i) => s + i.subtotal, 0) : parseFloat(txAmount)
+    if (!hasItems && (!total || total <= 0)) { setTxError('Monto inválido'); return }
+
+    const amtPaid = txPayType === 'credito' ? (parseFloat(txAmtPaid) || 0) : total
+
+    setTxSaving(true)
+
+    // Upload receipt if new file
+    let receiptUrl = txExistRec
+    if (txFile) {
+      const ext  = txFile.name.split('.').pop()
+      const path = `receipts/${userId}/${Date.now()}.${ext}`
+      const { error: upErr } = await supabase.storage.from('receipts').upload(path, txFile)
+      if (upErr) { setTxError('Error al subir recibo: ' + upErr.message); setTxSaving(false); return }
+      const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(path)
+      receiptUrl = urlData.publicUrl
+    }
+
+    const txPayload = {
+      business_id:  businessId,
+      type:         txType,
+      total,
+      description:  txDesc.trim() || null,
+      date:         txDate,
+      notes:        txNotes.trim() || null,
+      receipt_url:  receiptUrl,
+      created_by:   userId,
+      payment_type: txType === 'venta' ? txPayType : 'contado',
+      amount_paid:  txType === 'venta' ? amtPaid : total,
+      client_name:  txType === 'venta' && txClient.trim() ? txClient.trim() : null,
+    }
+
+    if (txEditId) {
+      // Net stock delta for venta/compra
+      if (hasItems) {
+        const deltas: Record<string, number> = {}
+        for (const orig of txOrigItems) {
+          deltas[orig.product_id] = (deltas[orig.product_id] ?? 0) + (txType === 'venta' ? +1 : -1) * orig.quantity
+        }
+        for (const item of validItems) {
+          deltas[item.product_id] = (deltas[item.product_id] ?? 0) + (txType === 'venta' ? -1 : +1) * item.quantity
+        }
+        const { data: freshProds } = await supabase.from('business_products').select('id,stock').eq('business_id', businessId)
+        for (const [prodId, delta] of Object.entries(deltas)) {
+          if (Math.abs(delta) < 0.001) continue
+          const prod = freshProds?.find(p => p.id === prodId)
+          if (!prod) continue
+          await supabase.from('business_products').update({ stock: Number(prod.stock) + delta }).eq('id', prodId)
+        }
+        await supabase.from('business_tx_items').delete().eq('transaction_id', txEditId)
+        await supabase.from('business_tx_items').insert(validItems.map(i => ({ ...i, transaction_id: txEditId })))
+      }
+      const { error } = await supabase.from('business_transactions').update(txPayload).eq('id', txEditId)
+      if (error) { setTxError(error.message); setTxSaving(false); return }
+    } else {
+      const { data: newTx, error } = await supabase.from('business_transactions').insert(txPayload).select().single()
+      if (error || !newTx) { setTxError(error?.message ?? 'Error'); setTxSaving(false); return }
+      if (hasItems) {
+        await supabase.from('business_tx_items').insert(validItems.map(i => ({ ...i, transaction_id: newTx.id })))
+        // Adjust stock
+        for (const item of validItems) {
+          const { data: prod } = await supabase.from('business_products').select('stock').eq('id', item.product_id).single()
+          if (!prod) continue
+          const newStock = txType === 'venta' ? Number(prod.stock) - item.quantity : Number(prod.stock) + item.quantity
+          await supabase.from('business_products').update({ stock: newStock }).eq('id', item.product_id)
+        }
+      }
+      // If credit sale with initial payment, record it
+      if (txType === 'venta' && txPayType === 'credito' && amtPaid > 0) {
+        await supabase.from('business_transaction_payments').insert({
+          transaction_id: newTx.id, business_id: businessId,
+          amount: amtPaid, date: txDate, notes: 'Pago inicial',
+        })
+      }
+    }
+
+    setTxSaving(false); setShowTxForm(false); await load()
+  }
+
+  async function handleDeleteTx(t: Transaction) {
+    if (t.created_by && t.created_by !== userId) { alert('Solo puedes eliminar tus propias transacciones.'); return }
+    if (!confirm('¿Eliminar esta transacción?')) return
+    if (t.type === 'venta' || t.type === 'compra') {
+      const { data: items } = await supabase.from('business_tx_items').select('*').eq('transaction_id', t.id)
+      for (const item of (items ?? []) as TxItem[]) {
+        const { data: prod } = await supabase.from('business_products').select('stock').eq('id', item.product_id).single()
+        if (!prod) continue
+        const restored = t.type === 'venta' ? Number(prod.stock) + item.quantity : Number(prod.stock) - item.quantity
+        await supabase.from('business_products').update({ stock: restored }).eq('id', item.product_id)
+      }
+    }
+    await supabase.from('business_transactions').delete().eq('id', t.id)
+    await load()
+  }
+
+  async function handleVerifyTx(t: Transaction) {
+    await supabase.from('business_transactions').update({
+      verified_by: userId, verified_at: new Date().toISOString(),
+    }).eq('id', t.id)
+    await load()
+  }
+
+  // ─── Payment handlers ────────────────────────────────────────────────────
+  async function openPayments(t: Transaction) {
+    setPayTx(t); setShowPayForm(false)
+    setPayAmount(''); setPayDate(today()); setPayNotes(''); setPayError('')
+    const { data } = await supabase.from('business_transaction_payments')
+      .select('*').eq('transaction_id', t.id).order('date')
+    setPayments((data ?? []) as TxPayment[])
+  }
+
+  async function handleAddPayment(e: React.FormEvent) {
+    e.preventDefault(); setPayError('')
+    const amount = parseFloat(payAmount)
+    if (!amount || amount <= 0) { setPayError('Monto inválido'); return }
+    if (!payTx) return
+    const remaining = Number(payTx.total) - Number(payTx.amount_paid ?? 0)
+    if (amount > remaining + 0.01) { setPayError(`El máximo a pagar es ${fmt(remaining)}`); return }
+    setPaySaving(true)
+
+    await supabase.from('business_transaction_payments').insert({
+      transaction_id: payTx.id, business_id: businessId,
+      amount, date: payDate, notes: payNotes.trim() || null,
+    })
+    const newPaid = Number(payTx.amount_paid ?? 0) + amount
+    await supabase.from('business_transactions').update({ amount_paid: newPaid }).eq('id', payTx.id)
+
+    setPaySaving(false); setShowPayForm(false); setPayAmount(''); setPayNotes('')
+    // Refresh
+    const { data } = await supabase.from('business_transaction_payments')
+      .select('*').eq('transaction_id', payTx.id).order('date')
+    setPayments((data ?? []) as TxPayment[])
+    // Update local tx
+    setPayTx(prev => prev ? { ...prev, amount_paid: newPaid } : null)
+    await load()
+  }
+
+  // ─── Capital handlers ────────────────────────────────────────────────────
+  async function handleAddCapital(e: React.FormEvent) {
+    e.preventDefault(); setCapError('')
+    const amount = parseFloat(capAmount)
+    if (!amount || amount <= 0) { setCapError('Monto inválido'); return }
+    setCapSaving(true)
+    const { error } = await supabase.from('business_capital').insert({
+      business_id: businessId, contributed_by: userId,
+      amount, description: capDesc.trim() || null, date: capDate,
+    })
+    if (error) { setCapError(error.message); setCapSaving(false); return }
+    setCapSaving(false); setShowCapForm(false)
+    setCapAmount(''); setCapDesc(''); setCapDate(today())
+    await load()
+  }
+
+  async function handleDeleteCapital(c: CapitalEntry) {
+    if (c.contributed_by !== userId) { alert('Solo puedes eliminar tus propios aportes.'); return }
+    if (!confirm('¿Eliminar este aporte de capital?')) return
+    await supabase.from('business_capital').delete().eq('id', c.id)
+    await load()
+  }
+
+  // ─── File handling ────────────────────────────────────────────────────────
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setTxFile(file)
+    const reader = new FileReader()
+    reader.onload = ev => setTxPreview(ev.target?.result as string)
+    reader.readAsDataURL(file)
+  }
+
+  // ─── Filtered transactions ────────────────────────────────────────────────
+  const filteredTxs = useMemo(() => txs.filter(t => {
+    if (filterMonth && !t.date.startsWith(filterMonth)) return false
+    if (filterType && t.type !== filterType) return false
+    return true
+  }), [txs, filterMonth, filterType])
+
+  // ─── Render ──────────────────────────────────────────────────────────────
+  if (loading) return (
+    <div className="flex items-center justify-center h-64 text-gray-400 text-sm">Cargando…</div>
+  )
+  if (!business) return null
+
+  const isPending = partnerId === 'pending'
+  const tabs = business.type === 'cambio'
+    ? (['dashboard', 'movimientos', 'socios'] as const)
+    : (['dashboard', 'inventario', 'movimientos', 'socios'] as const)
+
+  return (
+    <div className="max-w-lg mx-auto">
+
+      {/* Header */}
+      <div className="px-4 pt-4 pb-2 flex items-center gap-3">
+        <button onClick={() => router.back()} className="p-2 -ml-2 text-gray-400">
+          <ArrowLeft size={20} />
+        </button>
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+          style={{ backgroundColor: business.color + '22' }}>
+          {business.type === 'cambio'
+            ? <ArrowLeftRight size={18} style={{ color: business.color }} strokeWidth={1.8} />
+            : <Store size={18} style={{ color: business.color }} strokeWidth={1.8} />}
+        </div>
+        <div className="flex-1 min-w-0">
+          <h1 className="font-bold text-gray-900 text-[16px] truncate">{business.name}</h1>
+          {!isPending && partner && (
+            <p className="text-xs text-gray-400">con {displayName(partner)}</p>
+          )}
+        </div>
+      </div>
+
+      {/* Tab bar */}
+      <div className="px-4 pt-1 pb-3">
+        <div className="flex gap-1 bg-gray-100 p-1 rounded-2xl">
+          {tabs.map(t => (
+            <button key={t} onClick={() => setTab(t as typeof tab)}
+              className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all capitalize ${
+                tab === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400'
+              }`}>
+              {t === 'inventario' ? '📦' : t === 'movimientos' ? '📊' : t === 'socios' ? '🤝' : '🏠'} {t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ══════════════ DASHBOARD ══════════════ */}
+      {tab === 'dashboard' && (
+        <div className="px-4 space-y-3 pb-6">
+          {/* Resumen financiero */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Balance caja</p>
+              <p className={`text-xl font-bold ${metrics.cashBalance >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                {metrics.cashBalance < 0 ? '-' : ''}{fmt(metrics.cashBalance)}
+              </p>
+            </div>
+            {business.type === 'ventas' && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Inventario</p>
+                <p className="text-xl font-bold text-blue-600">{fmt(metrics.inventoryValue)}</p>
+              </div>
+            )}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Ganancia mes</p>
+              <p className={`text-xl font-bold ${metrics.monthProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                {metrics.monthProfit < 0 ? '-' : ''}{fmt(metrics.monthProfit)}
+              </p>
+            </div>
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Ganancia total</p>
+              <p className={`text-xl font-bold ${netProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                {netProfit < 0 ? '-' : ''}{fmt(netProfit)}
+              </p>
+            </div>
+          </div>
+
+          {/* Pendientes de cobro */}
+          {metrics.pendingCredit.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3.5">
+              <div className="flex items-center gap-2 mb-1">
+                <Clock size={16} className="text-amber-500" />
+                <p className="text-sm font-bold text-amber-700">Ventas por cobrar</p>
+              </div>
+              <p className="text-xs text-amber-600">
+                {metrics.pendingCredit.length} venta{metrics.pendingCredit.length !== 1 ? 's' : ''} pendiente{metrics.pendingCredit.length !== 1 ? 's' : ''} · {fmt(metrics.pendingTotal)} por cobrar
+              </p>
+              <button onClick={() => { setTab('movimientos'); setFilterType('venta') }}
+                className="text-xs font-bold text-amber-700 mt-1.5 underline">Ver ventas →</button>
+            </div>
+          )}
+
+          {/* Bajo stock */}
+          {business.type === 'ventas' && lowStock.length > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded-2xl px-4 py-3.5">
+              <div className="flex items-center gap-2 mb-1">
+                <AlertTriangle size={16} className="text-red-400" />
+                <p className="text-sm font-bold text-red-600">Stock bajo</p>
+              </div>
+              <p className="text-xs text-red-500">{lowStock.map(p => p.name).join(', ')}</p>
+            </div>
+          )}
+
+          {/* Mi ganancia */}
+          {!isPending && totalCap > 0 && (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Distribución de ganancia</p>
+              <div className="space-y-2">
+                {[
+                  { label: 'Tu ganancia', amount: myProfitShare, pct: isOwner ? ownerShare : memberProfitShare },
+                  { label: displayName(partner), amount: partnerProfitAmt, pct: partnerProfitShare },
+                ].map(row => (
+                  <div key={row.label} className="flex items-center justify-between">
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm text-gray-600 truncate block">{row.label}</span>
+                      <span className="text-[10px] text-gray-400">{row.pct}%</span>
+                    </div>
+                    <span className={`font-bold text-sm ml-3 ${row.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                      {fmt(row.amount)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Quick add */}
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            {(['venta', 'gasto', 'compra', 'ingreso'] as const).map(type => (
+              <button key={type} onClick={() => { setTab('movimientos'); openAddTx(type) }}
+                className={`${TX_BG[type]} rounded-2xl px-4 py-3.5 text-left active:opacity-80`}>
+                <p className={`text-xs font-bold ${TX_COLORS[type]}`}>+ {TX_LABEL[type]}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════ INVENTARIO ══════════════ */}
+      {tab === 'inventario' && business.type === 'ventas' && (
+        <div className="px-4 pb-6">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+              {products.length} producto{products.length !== 1 ? 's' : ''}
+            </p>
+            <button onClick={openAddProduct}
+              className="flex items-center gap-1 text-xs font-bold text-orange-500">
+              <Plus size={14} strokeWidth={2.5} /> Agregar
+            </button>
+          </div>
+          {products.length === 0 ? (
+            <div className="text-center py-12">
+              <Package size={32} className="text-gray-200 mx-auto mb-3" />
+              <p className="text-sm text-gray-400">Sin productos todavía</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {products.map(p => (
+                <div key={p.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-gray-900 text-[14px]">{p.name}</p>
+                      <div className="flex gap-3 mt-1 text-xs text-gray-500">
+                        <span>Costo: {fmt(p.cost_price)}</span>
+                        <span>Precio: {fmt(p.sale_price)}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <div className="text-right">
+                        <p className={`font-bold text-sm ${Number(p.stock) <= Number(p.min_stock) && p.min_stock > 0 ? 'text-red-500' : 'text-gray-800'}`}>
+                          {p.stock} {p.unit}
+                        </p>
+                      </div>
+                      <button onClick={() => openEditProduct(p)} className="text-gray-300 p-1"><Pencil size={14} /></button>
+                      {isOwner && (
+                        <button onClick={() => handleDeleteProduct(p)} className="text-gray-300 p-1"><Trash2 size={14} /></button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══════════════ MOVIMIENTOS ══════════════ */}
+      {tab === 'movimientos' && (
+        <div className="px-4 pb-6">
+          {/* Controls */}
+          <div className="flex gap-2 mb-3">
+            <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)}
+              className="flex-1 bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+            <select value={filterType} onChange={e => setFilterType(e.target.value)}
+              className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
+              <option value="">Todos</option>
+              <option value="venta">Ventas</option>
+              <option value="compra">Compras</option>
+              <option value="gasto">Gastos</option>
+              <option value="ingreso">Ingresos</option>
+              <option value="retiro">Retiros</option>
+            </select>
+            <button onClick={() => openAddTx('venta')}
+              className="bg-orange-500 text-white rounded-xl px-3 py-2 flex items-center gap-1 text-sm font-bold">
+              <Plus size={15} strokeWidth={2.5} />
+            </button>
+          </div>
+
+          {/* Types quick filter */}
+          <div className="flex gap-2 overflow-x-auto pb-2 mb-3 scrollbar-hide">
+            {['venta', 'compra', 'gasto', 'ingreso', 'retiro'].map(type => (
+              <button key={type} onClick={() => openAddTx(type as Transaction['type'])}
+                className={`flex-shrink-0 ${TX_BG[type]} ${TX_COLORS[type]} text-xs font-bold px-3 py-1.5 rounded-xl`}>
+                + {TX_LABEL[type]}
+              </button>
+            ))}
+          </div>
+
+          {filteredTxs.length === 0 ? (
+            <div className="text-center py-12">
+              <DollarSign size={32} className="text-gray-200 mx-auto mb-3" />
+              <p className="text-sm text-gray-400">Sin movimientos</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filteredTxs.map(t => {
+                const isCredit = t.type === 'venta' && t.payment_type === 'credito'
+                const paid = Number(t.amount_paid ?? t.total)
+                const total = Number(t.total)
+                const isPaid = paid >= total - 0.01
+                const isMine = !t.created_by || t.created_by === userId
+                const isVerified = !!t.verified_at
+                const canVerify = !isMine && !isVerified && !isPending
+
+                return (
+                  <div key={t.id}
+                    className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3 active:bg-gray-50"
+                    onClick={() => isCredit && !isPaid ? openPayments(t) : undefined}>
+                    <div className="flex items-start gap-3">
+                      <div className={`w-9 h-9 ${TX_BG[t.type]} rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5`}>
+                        {t.type === 'venta' ? <TrendingUp size={16} className={TX_COLORS[t.type]} />
+                          : t.type === 'compra' ? <Package size={16} className={TX_COLORS[t.type]} />
+                          : t.type === 'retiro' ? <Wallet size={16} className={TX_COLORS[t.type]} />
+                          : t.type === 'ingreso' ? <TrendingUp size={16} className={TX_COLORS[t.type]} />
+                          : <TrendingDown size={16} className={TX_COLORS[t.type]} />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${TX_BG[t.type]} ${TX_COLORS[t.type]}`}>
+                            {TX_LABEL[t.type]}
+                          </span>
+                          {/* Verification badge */}
+                          {!isMine && (
+                            isVerified
+                              ? <span className="text-[10px] text-emerald-600 font-semibold flex items-center gap-0.5">
+                                  <ShieldCheck size={11} /> Verificado
+                                </span>
+                              : <span className="text-[10px] text-amber-500 font-semibold flex items-center gap-0.5">
+                                  <Clock size={11} /> Sin verificar
+                                </span>
+                          )}
+                          {/* Credit badge */}
+                          {isCredit && (
+                            <span className={`text-[10px] font-semibold flex items-center gap-0.5 ${isPaid ? 'text-emerald-500' : 'text-amber-500'}`}>
+                              <CreditCard size={11} /> {isPaid ? 'Cobrado' : `${fmt(paid)}/${fmt(total)}`}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm font-semibold text-gray-800 mt-0.5 truncate">
+                          {t.description || TX_LABEL[t.type]}
+                          {t.client_name ? ` · ${t.client_name}` : ''}
+                        </p>
+                        <p className="text-xs text-gray-400">
+                          {fmtDate(t.date)}
+                          {!isMine ? ` · ${displayName(partner)}` : ''}
+                          {t.notes ? ` · ${t.notes}` : ''}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                        <span className={`font-bold text-sm ${TX_COLORS[t.type]}`}>
+                          {t.type === 'venta' || t.type === 'ingreso' ? '+' : '-'}{fmt(t.total)}
+                        </span>
+                        <div className="flex gap-1">
+                          {t.receipt_url && (
+                            <button onClick={e => { e.stopPropagation(); setViewReceipt(t.receipt_url!) }}
+                              className="text-[10px] text-blue-500 font-semibold">Recibo</button>
+                          )}
+                          {isCredit && !isPaid && (
+                            <button onClick={e => { e.stopPropagation(); openPayments(t) }}
+                              className="text-[10px] text-amber-500 font-semibold">+ Pago</button>
+                          )}
+                          {canVerify && (
+                            <button onClick={e => { e.stopPropagation(); handleVerifyTx(t) }}
+                              className="text-[10px] text-emerald-600 font-semibold flex items-center gap-0.5">
+                              <Check size={10} /> Verificar
+                            </button>
+                          )}
+                          <button onClick={e => { e.stopPropagation(); openEditTx(t) }}
+                            className="text-gray-300 p-0.5"><Pencil size={12} /></button>
+                          <button onClick={e => { e.stopPropagation(); handleDeleteTx(t) }}
+                            className="text-gray-300 p-0.5"><Trash2 size={12} /></button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══════════════ SOCIOS ══════════════ */}
+      {tab === 'socios' && (
+        <div className="px-4 pb-6 space-y-5">
+
+          {/* Capital */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Capital invertido</p>
+              <button onClick={() => { setShowCapForm(true); setCapError('') }}
+                className="flex items-center gap-1 text-[11px] font-bold text-orange-500">
+                <Plus size={13} strokeWidth={2.5} /> Agregar aporte
+              </button>
+            </div>
+            {totalCap > 0 ? (
+              <div className="space-y-2 mb-3">
+                {[
+                  { label: 'Tu capital', amount: myCapTotal, pct: totalCap ? (myCapTotal / totalCap) * 100 : 0 },
+                  ...(!isPending ? [{ label: displayName(partner), amount: partnerCapTotal, pct: totalCap ? (partnerCapTotal / totalCap) * 100 : 0 }] : []),
+                ].map(row => (
+                  <div key={row.label}>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-sm text-gray-600">{row.label}</span>
+                      <div className="flex gap-2 items-center">
+                        <span className="text-xs text-gray-400">{row.pct.toFixed(0)}%</span>
+                        <span className="font-bold text-sm text-gray-900">{fmt(row.amount)}</span>
+                      </div>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-orange-400 rounded-full" style={{ width: `${row.pct}%` }} />
+                    </div>
+                  </div>
+                ))}
+                <div className="pt-2 border-t border-gray-100 flex justify-between">
+                  <span className="text-sm font-semibold text-gray-700">Total</span>
+                  <span className="font-bold text-gray-900">{fmt(totalCap)}</span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400 mb-3">Sin aportes de capital todavía</p>
+            )}
+
+            {/* Capital history */}
+            {capital.length > 0 && (
+              <div className="border-t border-gray-50 pt-3 space-y-2">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Historial</p>
+                {capital.map(c => {
+                  const isMine = c.contributed_by === userId
+                  return (
+                    <div key={c.id} className="flex items-center gap-2">
+                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${isMine ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>
+                        {isMine ? 'TÚ' : initials(partner)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-gray-800">{fmt(c.amount)}</p>
+                        <p className="text-[10px] text-gray-400">{fmtDate(c.date)}{c.description ? ` · ${c.description}` : ''}</p>
+                      </div>
+                      {isMine && (
+                        <button onClick={() => handleDeleteCapital(c)} className="text-gray-200 p-1">
+                          <Trash2 size={12} />
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Miembros */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Miembros</p>
+            <div className="space-y-3">
+              {/* Owner */}
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-orange-100 rounded-xl flex items-center justify-center">
+                  <span className="text-orange-700 text-xs font-bold">
+                    {isOwner ? 'TÚ' : initials(partner)}
+                  </span>
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-gray-800">
+                    {isOwner ? 'Tú' : displayName(partner)}
+                    <span className="ml-1.5 text-[10px] bg-orange-50 text-orange-600 font-bold px-1.5 py-0.5 rounded-full">Dueño</span>
+                  </p>
+                  <p className="text-xs text-gray-400">{isOwner ? ownerShare : partnerProfitShare}% de ganancia</p>
+                </div>
+              </div>
+              {/* Members */}
+              {members.map(m => (
+                <div key={m.id} className="flex items-center gap-3">
+                  <div className="w-9 h-9 bg-blue-100 rounded-xl flex items-center justify-center">
+                    <span className="text-blue-700 text-xs font-bold">
+                      {m.user_id === userId ? 'TÚ' : initials(m.profile)}
+                    </span>
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-gray-800">
+                      {m.user_id === userId ? 'Tú' : displayName(m.profile)}
+                      <span className="ml-1.5 text-[10px] bg-blue-50 text-blue-600 font-bold px-1.5 py-0.5 rounded-full">Socio</span>
+                    </p>
+                    <p className="text-xs text-gray-400">{m.profit_share}% de ganancia</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Ganancia por persona */}
+          {!isPending && (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Ganancia acumulada</p>
+              <div className="space-y-2">
+                {[
+                  { label: 'Tú', amount: myProfitShare, pct: isOwner ? ownerShare : memberProfitShare },
+                  { label: displayName(partner), amount: partnerProfitAmt, pct: partnerProfitShare },
+                ].map(row => (
+                  <div key={row.label} className="flex items-center justify-between">
+                    <div>
+                      <span className="text-sm text-gray-600">{row.label}</span>
+                      <span className="text-xs text-gray-400 ml-1.5">({row.pct}%)</span>
+                    </div>
+                    <span className={`font-bold text-sm ${row.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                      {fmt(row.amount)}
+                    </span>
+                  </div>
+                ))}
+                <div className="pt-2 border-t border-gray-100 flex justify-between">
+                  <span className="text-sm font-semibold text-gray-700">Ganancia neta total</span>
+                  <span className={`font-bold ${netProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{fmt(netProfit)}</span>
+                </div>
+              </div>
+              <p className="text-[10px] text-gray-400 mt-2">* Solo incluye lo cobrado en ventas a crédito</p>
+            </div>
+          )}
+
+          {/* Retiro rápido */}
+          <button onClick={() => openAddTx('retiro')}
+            className="w-full bg-purple-50 border border-purple-100 rounded-2xl px-4 py-3.5 text-left flex items-center gap-3 active:opacity-80">
+            <Wallet size={20} className="text-purple-400" />
+            <div>
+              <p className="text-sm font-bold text-purple-700">Registrar retiro</p>
+              <p className="text-xs text-gray-400">Cuando alguien saca dinero del negocio</p>
+            </div>
+            <Plus size={16} className="text-purple-400 ml-auto" />
+          </button>
+        </div>
+      )}
+
+      {/* ══════════════ MODAL: Transacción ══════════════ */}
+      {showTxForm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowTxForm(false)}>
+          <div className="bg-white w-full rounded-t-3xl shadow-2xl flex flex-col" style={{ maxHeight: '92vh' }}
+            onClick={e => e.stopPropagation()}>
+            <div className="flex-shrink-0 px-5 pt-3 pb-2">
+              <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3" />
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-gray-900">{txEditId ? 'Editar' : 'Nueva'} {TX_LABEL[txType].toLowerCase()}</h2>
+                <button onClick={() => setShowTxForm(false)} className="p-1 text-gray-400"><X size={20} /></button>
+              </div>
+            </div>
+
+            <form id="tx-form" onSubmit={handleSaveTx} className="flex-1 overflow-y-auto px-5 pt-2 pb-4 space-y-4">
+              {txError && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-xl">{txError}</p>}
+
+              {/* Type selector */}
+              {!txEditId && (
+                <div className="flex gap-1.5 flex-wrap">
+                  {(['venta','compra','gasto','ingreso','retiro'] as const).map(type => (
+                    <button key={type} type="button" onClick={() => {
+                      setTxType(type)
+                      setTxItems(type === 'venta' || type === 'compra'
+                        ? [{ product_id: products[0]?.id ?? '', qty: '1', unit_price: '' }] : [])
+                      setTxAmount('')
+                      setTxPayType('contado')
+                    }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border-2 transition-all ${
+                        txType === type ? `${TX_BG[type]} ${TX_COLORS[type]} border-current` : 'bg-gray-50 text-gray-400 border-transparent'
+                      }`}>
+                      {TX_LABEL[type]}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Products (venta/compra) */}
+              {(txType === 'venta' || txType === 'compra') && (
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">Productos</label>
+                  <div className="space-y-2">
+                    {txItems.map((item, idx) => (
+                      <div key={idx} className="flex gap-2 items-center">
+                        <select value={item.product_id}
+                          onChange={e => setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, product_id: e.target.value } : it))}
+                          className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
+                          {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                        <input type="number" placeholder="Cant" min="0.01" step="any" value={item.qty}
+                          onChange={e => setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, qty: e.target.value } : it))}
+                          className="w-16 bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                        <input type="number" placeholder="Precio" min="0" step="any" value={item.unit_price}
+                          onChange={e => setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, unit_price: e.target.value } : it))}
+                          className="w-24 bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                        {txItems.length > 1 && (
+                          <button type="button" onClick={() => setTxItems(prev => prev.filter((_, i) => i !== idx))}
+                            className="text-gray-300 p-1"><X size={14} /></button>
+                        )}
+                      </div>
+                    ))}
+                    <button type="button" onClick={() => setTxItems(prev => [...prev, { product_id: products[0]?.id ?? '', qty: '1', unit_price: '' }])}
+                      className="text-xs text-orange-500 font-semibold flex items-center gap-1">
+                      <Plus size={13} /> Agregar producto
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Amount (non-product types) */}
+              {txType !== 'venta' && txType !== 'compra' && (
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Monto</label>
+                  <input type="number" required min="0.01" step="any" placeholder="0.00" value={txAmount}
+                    onChange={e => setTxAmount(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-orange-400 focus:bg-white" />
+                </div>
+              )}
+
+              {/* Credit options (venta only) */}
+              {txType === 'venta' && (
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">Pago</label>
+                  <div className="grid grid-cols-2 gap-2 mb-3">
+                    {([['contado', '💵 Contado', 'Pagó completo'], ['credito', '🕐 Crédito', 'Pago parcial']] as const).map(([v, label, sub]) => (
+                      <button key={v} type="button" onClick={() => setTxPayType(v)}
+                        className={`py-2.5 px-3 rounded-xl text-sm font-semibold border-2 text-left transition-all ${
+                          txPayType === v ? 'bg-orange-50 border-orange-400 text-orange-700' : 'bg-gray-50 border-gray-200 text-gray-500'}`}>
+                        <div>{label}</div>
+                        <div className="text-[10px] font-normal text-gray-400">{sub}</div>
+                      </button>
+                    ))}
+                  </div>
+                  {txPayType === 'credito' && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">
+                          Monto inicial recibido
+                        </label>
+                        <input type="number" min="0" step="any" placeholder="0.00 (puede ser 0)" value={txAmtPaid}
+                          onChange={e => setTxAmtPaid(e.target.value)}
+                          className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">
+                          Nombre del cliente
+                        </label>
+                        <input type="text" placeholder="Ej: Pedro Martínez" value={txClient}
+                          onChange={e => setTxClient(e.target.value)}
+                          className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Description */}
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">
+                  Descripción <span className="font-normal normal-case">(opcional)</span>
+                </label>
+                <input type="text" placeholder="Ej: Tractor John Deere" value={txDesc}
+                  onChange={e => setTxDesc(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+              </div>
+
+              {/* Date + Notes */}
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Fecha</label>
+                  <input type="date" required value={txDate} onChange={e => setTxDate(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                </div>
+                <div className="flex-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Notas</label>
+                  <input type="text" placeholder="Opcional" value={txNotes} onChange={e => setTxNotes(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                </div>
+              </div>
+
+              {/* Receipt */}
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">Recibo (opcional)</label>
+                {txExistRec && !txFile && (
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs text-gray-500">Recibo actual guardado</span>
+                    <button type="button" onClick={() => setViewReceipt(txExistRec)} className="text-xs text-blue-500 font-semibold">Ver</button>
+                    <button type="button" onClick={() => setTxExistRec(null)} className="text-xs text-red-400 font-semibold">Quitar</button>
+                  </div>
+                )}
+                {txPreview ? (
+                  <div className="relative">
+                    <img src={txPreview} alt="preview" className="w-full h-32 object-cover rounded-2xl" />
+                    <button type="button" onClick={() => { setTxFile(null); setTxPreview(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
+                      className="absolute top-2 right-2 bg-black/60 text-white rounded-full p-1"><X size={14} /></button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => fileInputRef.current?.click()}
+                      className="flex-1 border-2 border-dashed border-gray-200 rounded-2xl py-3 flex items-center justify-center gap-2 text-sm text-gray-400">
+                      <ImageIcon size={16} /> Galería
+                    </button>
+                    <button type="button" onClick={() => { if (fileInputRef.current) { fileInputRef.current.setAttribute('capture', 'environment'); fileInputRef.current.click() } }}
+                      className="flex-1 border-2 border-dashed border-gray-200 rounded-2xl py-3 flex items-center justify-center gap-2 text-sm text-gray-400">
+                      <Camera size={16} /> Cámara
+                    </button>
+                  </div>
+                )}
+                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+              </div>
+            </form>
+
+            <div className="flex-shrink-0 px-5 py-4 border-t border-gray-100 flex gap-2"
+              style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
+              <button type="button" onClick={() => setShowTxForm(false)}
+                className="w-24 border-2 border-gray-200 text-gray-600 font-semibold py-4 rounded-2xl text-sm flex-shrink-0">Cancelar</button>
+              <button form="tx-form" type="submit" disabled={txSaving}
+                className="flex-1 bg-orange-500 disabled:opacity-60 text-white font-bold py-4 rounded-2xl text-[15px] shadow-sm">
+                {txSaving ? 'Guardando…' : txEditId ? 'Actualizar' : 'Guardar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════ MODAL: Pagos de crédito ══════════════ */}
+      {payTx && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setPayTx(null)}>
+          <div className="bg-white w-full rounded-t-3xl shadow-2xl" style={{ maxHeight: '80vh' }}
+            onClick={e => e.stopPropagation()}>
+            <div className="px-5 pt-3 pb-2">
+              <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3" />
+              <div className="flex justify-between items-start">
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Pagos recibidos</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {payTx.description || 'Venta'} {payTx.client_name ? `· ${payTx.client_name}` : ''}
+                  </p>
+                </div>
+                <button onClick={() => setPayTx(null)} className="p-1 text-gray-400"><X size={20} /></button>
+              </div>
+              {/* Progress */}
+              <div className="mt-3 bg-gray-50 rounded-2xl px-4 py-3">
+                <div className="flex justify-between text-sm mb-2">
+                  <span className="text-gray-600">Cobrado: <span className="font-bold text-emerald-600">{fmt(Number(payTx.amount_paid ?? 0))}</span></span>
+                  <span className="text-gray-600">Total: <span className="font-bold">{fmt(Number(payTx.total))}</span></span>
+                </div>
+                <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                  <div className="h-full bg-emerald-400 rounded-full transition-all"
+                    style={{ width: `${Math.min(100, (Number(payTx.amount_paid ?? 0) / Number(payTx.total)) * 100)}%` }} />
+                </div>
+                <p className="text-xs text-amber-600 font-semibold mt-1.5">
+                  Por cobrar: {fmt(Number(payTx.total) - Number(payTx.amount_paid ?? 0))}
+                </p>
+              </div>
+            </div>
+
+            <div className="overflow-y-auto px-5 pb-3" style={{ maxHeight: '30vh' }}>
+              {payments.length === 0
+                ? <p className="text-sm text-gray-400 py-4 text-center">Sin pagos registrados</p>
+                : payments.map(p => (
+                  <div key={p.id} className="flex justify-between items-center py-2.5 border-b border-gray-50 last:border-0">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">{fmt(p.amount)}</p>
+                      <p className="text-xs text-gray-400">{fmtDate(p.date)}{p.notes ? ` · ${p.notes}` : ''}</p>
+                    </div>
+                    <span className="text-emerald-600 font-bold text-sm">+{fmt(p.amount)}</span>
+                  </div>
+                ))
+              }
+            </div>
+
+            {Number(payTx.amount_paid ?? 0) < Number(payTx.total) - 0.01 && (
+              showPayForm ? (
+                <form onSubmit={handleAddPayment} className="px-5 pb-4 space-y-3 border-t border-gray-100 pt-3">
+                  {payError && <p className="text-red-600 text-sm">{payError}</p>}
+                  <div className="flex gap-2">
+                    <input type="number" required min="0.01" step="any" placeholder="Monto" value={payAmount}
+                      onChange={e => setPayAmount(e.target.value)}
+                      className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                    <input type="date" required value={payDate} onChange={e => setPayDate(e.target.value)}
+                      className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                  </div>
+                  <input type="text" placeholder="Notas (opcional)" value={payNotes} onChange={e => setPayNotes(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                  <div className="flex gap-2" style={{ paddingBottom: 'max(0rem, env(safe-area-inset-bottom))' }}>
+                    <button type="button" onClick={() => setShowPayForm(false)}
+                      className="w-24 border-2 border-gray-200 text-gray-600 font-semibold py-3.5 rounded-2xl text-sm flex-shrink-0">Cancelar</button>
+                    <button type="submit" disabled={paySaving}
+                      className="flex-1 bg-emerald-500 text-white font-bold py-3.5 rounded-2xl text-sm">
+                      {paySaving ? 'Guardando…' : 'Registrar pago'}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="px-5 py-3 border-t border-gray-100"
+                  style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
+                  <button onClick={() => setShowPayForm(true)}
+                    className="w-full bg-emerald-500 text-white font-bold py-4 rounded-2xl text-sm">
+                    + Registrar nuevo pago
+                  </button>
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════ MODAL: Producto ══════════════ */}
+      {showProdForm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowProdForm(false)}>
+          <div className="bg-white w-full rounded-t-3xl shadow-2xl flex flex-col" style={{ maxHeight: '85vh' }}
+            onClick={e => e.stopPropagation()}>
+            <div className="flex-shrink-0 px-5 pt-3 pb-2">
+              <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3" />
+              <div className="flex justify-between items-center">
+                <h2 className="text-lg font-bold text-gray-900">{pEditId ? 'Editar' : 'Nuevo'} producto</h2>
+                <button onClick={() => setShowProdForm(false)} className="p-1 text-gray-400"><X size={20} /></button>
+              </div>
+            </div>
+            <form id="prod-form" onSubmit={handleSaveProduct} className="flex-1 overflow-y-auto px-5 pt-2 pb-4 space-y-4">
+              {pError && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-xl">{pError}</p>}
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Nombre</label>
+                <input required value={pName} onChange={e => setPName(e.target.value)} placeholder="Ej: Tractor John Deere"
+                  className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-orange-400" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Costo</label>
+                  <input type="number" min="0" step="any" value={pCost} onChange={e => setPCost(e.target.value)} placeholder="0.00"
+                    className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Precio venta</label>
+                  <input type="number" min="0" step="any" value={pSale} onChange={e => setPSale(e.target.value)} placeholder="0.00"
+                    className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Stock actual</label>
+                  <input type="number" min="0" step="any" value={pStock} onChange={e => setPStock(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Stock mínimo</label>
+                  <input type="number" min="0" step="any" value={pMin} onChange={e => setPMin(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                </div>
+              </div>
+            </form>
+            <div className="flex-shrink-0 px-5 py-4 border-t border-gray-100 flex gap-2"
+              style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
+              <button type="button" onClick={() => setShowProdForm(false)}
+                className="w-24 border-2 border-gray-200 text-gray-600 font-semibold py-4 rounded-2xl text-sm flex-shrink-0">Cancelar</button>
+              <button form="prod-form" type="submit" disabled={pSaving}
+                className="flex-1 bg-orange-500 disabled:opacity-60 text-white font-bold py-4 rounded-2xl text-[15px] shadow-sm">
+                {pSaving ? 'Guardando…' : pEditId ? 'Actualizar' : 'Crear producto'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════ MODAL: Capital ══════════════ */}
+      {showCapForm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowCapForm(false)}>
+          <div className="bg-white w-full rounded-t-3xl shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="px-5 pt-3 pb-2">
+              <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3" />
+              <div className="flex justify-between items-center">
+                <h2 className="text-lg font-bold text-gray-900">Agregar aporte de capital</h2>
+                <button onClick={() => setShowCapForm(false)} className="p-1 text-gray-400"><X size={20} /></button>
+              </div>
+            </div>
+            <form id="cap-form" onSubmit={handleAddCapital} className="px-5 pt-2 pb-4 space-y-4">
+              {capError && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-xl">{capError}</p>}
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Monto (USD)</label>
+                <input type="number" required min="0.01" step="any" placeholder="0.00" value={capAmount}
+                  onChange={e => setCapAmount(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-orange-400" />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">
+                  Descripción <span className="font-normal normal-case">(opcional)</span>
+                </label>
+                <input type="text" placeholder="Ej: Capital inicial" value={capDesc} onChange={e => setCapDesc(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Fecha</label>
+                <input type="date" required value={capDate} onChange={e => setCapDate(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+              </div>
+            </form>
+            <div className="px-5 py-4 border-t border-gray-100 flex gap-2"
+              style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
+              <button type="button" onClick={() => setShowCapForm(false)}
+                className="w-24 border-2 border-gray-200 text-gray-600 font-semibold py-4 rounded-2xl text-sm flex-shrink-0">Cancelar</button>
+              <button form="cap-form" type="submit" disabled={capSaving}
+                className="flex-1 bg-orange-500 disabled:opacity-60 text-white font-bold py-4 rounded-2xl text-[15px] shadow-sm">
+                {capSaving ? 'Guardando…' : 'Registrar aporte'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════ MODAL: Ver recibo ══════════════ */}
+      {viewReceipt && (
+        <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4"
+          onClick={() => setViewReceipt(null)}>
+          <img src={viewReceipt} alt="recibo" className="max-w-full max-h-full rounded-2xl object-contain" />
+          <button onClick={() => setViewReceipt(null)}
+            className="absolute top-6 right-6 bg-white/20 text-white rounded-full p-2"><X size={20} /></button>
+        </div>
+      )}
+    </div>
+  )
+}
