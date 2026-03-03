@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   Home, Receipt, CalendarClock, ShoppingCart, CircleUser, TrendingUp,
-  LayoutDashboard, Wallet, ArrowLeftRight, Store, Bell, Handshake,
+  LayoutDashboard, Wallet, ArrowLeftRight, Store, Bell, Handshake, Banknote,
 } from 'lucide-react'
 import { useAppMode } from '@/contexts/AppModeContext'
 
@@ -27,6 +27,7 @@ const PERSONAL_NAV = [
 const BUSINESS_NAV = [
   { href: '/business',  label: 'Negocios', Icon: Store      },
   { href: '/partners',  label: 'Socios',   Icon: Handshake  },
+  { href: '/tasas',     label: 'Tasas',    Icon: Banknote   },
   { href: '/profile',   label: 'Perfil',   Icon: CircleUser },
 ]
 
