@@ -954,6 +954,26 @@ export default function PartnerBusinessPage() {
             </div>
             <ChevronRight size={16} className="text-orange-400 ml-auto" />
           </a>
+
+          {/* Chat + Tareas */}
+          <div className="grid grid-cols-2 gap-3">
+            <a href={`/partners/${partnerId}/${businessId}/chat`}
+              className="bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3.5 flex items-center gap-2 active:opacity-80">
+              <span className="text-xl">💬</span>
+              <div>
+                <p className="text-sm font-bold text-blue-700">Chat</p>
+                <p className="text-xs text-gray-400">Mensajes</p>
+              </div>
+            </a>
+            <a href={`/partners/${partnerId}/${businessId}/todos`}
+              className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3.5 flex items-center gap-2 active:opacity-80">
+              <span className="text-xl">✅</span>
+              <div>
+                <p className="text-sm font-bold text-emerald-700">Tareas</p>
+                <p className="text-xs text-gray-400">Pendientes</p>
+              </div>
+            </a>
+          </div>
         </div>
       )}
 
