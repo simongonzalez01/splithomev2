@@ -84,7 +84,7 @@ export default function PartnerBusinessPage() {
   const [exchanges, setExchanges] = useState<Exchange[]>([])
   const [loading,  setLoading]  = useState(true)
 
-  const [tab, setTab] = useState<'dashboard' | 'inventario' | 'movimientos' | 'socios'>('dashboard')
+  const [tab, setTab] = useState<'dashboard' | 'inventario' | 'movimientos' | 'socios' | 'chat'>('dashboard')
 
   // Filters
   const [filterMonth, setFilterMonth] = useState(mStart())
@@ -592,8 +592,23 @@ export default function PartnerBusinessPage() {
 
   const isPending = partnerId === 'pending'
   const tabs = business.type === 'cambio'
-    ? (['dashboard', 'movimientos', 'socios'] as const)
-    : (['dashboard', 'inventario', 'movimientos', 'socios'] as const)
+    ? (['dashboard', 'movimientos', 'socios', 'chat'] as const)
+    : (['dashboard', 'inventario', 'movimientos', 'socios', 'chat'] as const)
+
+  const TAB_LABELS: Record<string, string> = {
+    dashboard: '🏠',
+    inventario: '📦',
+    movimientos: '📊',
+    socios: '🤝',
+    chat: '💬',
+  }
+  const TAB_NAMES: Record<string, string> = {
+    dashboard: 'Inicio',
+    inventario: 'Stock',
+    movimientos: business.type === 'cambio' ? 'Ops' : 'Movs',
+    socios: 'Socios',
+    chat: 'Chat',
+  }
 
   return (
     <div className="max-w-lg mx-auto">
@@ -619,13 +634,23 @@ export default function PartnerBusinessPage() {
 
       {/* Tab bar */}
       <div className="px-4 pt-1 pb-3">
-        <div className="flex gap-1 bg-gray-100 p-1 rounded-2xl">
+        <div className="flex gap-0.5 bg-gray-100 p-1 rounded-2xl">
           {tabs.map(t => (
-            <button key={t} onClick={() => setTab(t as typeof tab)}
-              className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all capitalize ${
+            <button
+              key={t}
+              onClick={() => {
+                if (t === 'chat') {
+                  router.push(`/partners/${partnerId}/${businessId}/chat`)
+                } else {
+                  setTab(t as typeof tab)
+                }
+              }}
+              className={`flex-1 py-2 rounded-xl text-[10px] font-bold transition-all flex flex-col items-center gap-0.5 ${
                 tab === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400'
-              }`}>
-              {t === 'inventario' ? '📦' : t === 'movimientos' ? '📊' : t === 'socios' ? '🤝' : '🏠'} {t.charAt(0).toUpperCase() + t.slice(1)}
+              }`}
+            >
+              <span className="text-base leading-none">{TAB_LABELS[t]}</span>
+              <span>{TAB_NAMES[t]}</span>
             </button>
           ))}
         </div>
@@ -785,25 +810,16 @@ export default function PartnerBusinessPage() {
             </>
           )}
 
-          {/* ── Chat + Tareas — visible for ALL business types ─────────────── */}
-          <div className="grid grid-cols-2 gap-3">
-            <a href={`/partners/${partnerId}/${businessId}/chat`}
-              className="bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3.5 flex items-center gap-2 active:opacity-80">
-              <span className="text-xl">💬</span>
-              <div>
-                <p className="text-sm font-bold text-blue-700">Chat</p>
-                <p className="text-xs text-gray-400">Mensajes</p>
-              </div>
-            </a>
-            <a href={`/partners/${partnerId}/${businessId}/todos`}
-              className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3.5 flex items-center gap-2 active:opacity-80">
-              <span className="text-xl">✅</span>
-              <div>
-                <p className="text-sm font-bold text-emerald-700">Tareas</p>
-                <p className="text-xs text-gray-400">Pendientes</p>
-              </div>
-            </a>
-          </div>
+          {/* ── Tareas — visible for ALL business types ─────────────── */}
+          <a href={`/partners/${partnerId}/${businessId}/todos`}
+            className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3.5 flex items-center gap-3 active:opacity-80">
+            <span className="text-2xl">✅</span>
+            <div className="flex-1">
+              <p className="text-sm font-bold text-emerald-700">Tareas pendientes</p>
+              <p className="text-xs text-gray-400">Ver y gestionar tareas del negocio</p>
+            </div>
+            <ChevronRight size={16} className="text-emerald-300" />
+          </a>
         </div>
       )}
 
@@ -1212,25 +1228,6 @@ export default function PartnerBusinessPage() {
             <ChevronRight size={16} className="text-orange-400 ml-auto" />
           </a>
 
-          {/* Chat + Tareas */}
-          <div className="grid grid-cols-2 gap-3">
-            <a href={`/partners/${partnerId}/${businessId}/chat`}
-              className="bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3.5 flex items-center gap-2 active:opacity-80">
-              <span className="text-xl">💬</span>
-              <div>
-                <p className="text-sm font-bold text-blue-700">Chat</p>
-                <p className="text-xs text-gray-400">Mensajes</p>
-              </div>
-            </a>
-            <a href={`/partners/${partnerId}/${businessId}/todos`}
-              className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3.5 flex items-center gap-2 active:opacity-80">
-              <span className="text-xl">✅</span>
-              <div>
-                <p className="text-sm font-bold text-emerald-700">Tareas</p>
-                <p className="text-xs text-gray-400">Pendientes</p>
-              </div>
-            </a>
-          </div>
         </div>
       )}
 
