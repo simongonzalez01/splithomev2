@@ -143,18 +143,18 @@ export default function PartnerBusinessPage() {
   const [capError,    setCapError]    = useState('')
 
   // ── Exchange form (cambio businesses)
-  const [showExForm,  setShowExForm]  = useState(false)
-  const [exEditId,    setExEditId]    = useState<string | null>(null)
-  const [exCurrSent,  setExCurrSent]  = useState('USD')
-  const [exAmtSent,   setExAmtSent]   = useState('')
-  const [exCurrRecv,  setExCurrRecv]  = useState('ARS')
-  const [exAmtRecv,   setExAmtRecv]   = useState('')
-  const [exRate,      setExRate]      = useState('')
-  const [exMethod,    setExMethod]    = useState('efectivo')
-  const [exDate,      setExDate]      = useState(today())
-  const [exNotes,     setExNotes]     = useState('')
-  const [exSaving,    setExSaving]    = useState(false)
-  const [exError,     setExError]     = useState('')
+  const [showExForm,   setShowExForm]   = useState(false)
+  const [exEditId,     setExEditId]     = useState<string | null>(null)
+  const [exSentBy,     setExSentBy]     = useState<'me' | 'partner'>('me')
+  const [exSenderCurr, setExSenderCurr] = useState<'VES' | 'USD'>('VES')
+  const [exVesAmt,     setExVesAmt]     = useState('')
+  const [exUsdAmt,     setExUsdAmt]     = useState('')
+  const [exMethod,     setExMethod]     = useState('pago_movil')
+  const [exRef,        setExRef]        = useState('')
+  const [exDate,       setExDate]       = useState(today())
+  const [exNotes,      setExNotes]      = useState('')
+  const [exSaving,     setExSaving]     = useState(false)
+  const [exError,      setExError]      = useState('')
 
   // ─── Load ───────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -252,16 +252,27 @@ export default function PartnerBusinessPage() {
     const mStr = mStart()
     const todayExs  = exchanges.filter(e => e.date === todayStr)
     const monthExs  = exchanges.filter(e => e.date.startsWith(mStr))
-    const byPair: Record<string, { sent: number; recv: number; count: number }> = {}
+    // Net balance: total USD sent by me vs by partner this month
+    let myUsdSent = 0, partnerUsdSent = 0
+    let myVesSent = 0, partnerVesSent = 0
     for (const e of monthExs) {
-      const key = `${e.currency_sent}→${e.currency_received}`
-      if (!byPair[key]) byPair[key] = { sent: 0, recv: 0, count: 0 }
-      byPair[key].sent += Number(e.amount_sent)
-      byPair[key].recv += Number(e.amount_received)
-      byPair[key].count++
+      const isMine = !e.sent_by || e.sent_by === userId
+      const usdAmt = e.currency_sent === 'USD' ? Number(e.amount_sent) : Number(e.amount_received)
+      const vesAmt = e.currency_sent === 'VES' ? Number(e.amount_sent) : Number(e.amount_received)
+      if (isMine) { myUsdSent += usdAmt; myVesSent += vesAmt }
+      else         { partnerUsdSent += usdAmt; partnerVesSent += vesAmt }
     }
-    return { todayCount: todayExs.length, monthCount: monthExs.length, totalCount: exchanges.length, byPair }
-  }, [exchanges, business])
+    // Method breakdown this month
+    const byMethod: Record<string, number> = {}
+    for (const e of monthExs) {
+      const m = e.method ?? 'otro'
+      byMethod[m] = (byMethod[m] ?? 0) + 1
+    }
+    return {
+      todayCount: todayExs.length, monthCount: monthExs.length, totalCount: exchanges.length,
+      myUsdSent, partnerUsdSent, myVesSent, partnerVesSent, byMethod,
+    }
+  }, [exchanges, business, userId])
 
   // Filtered exchanges
   const filteredExchanges = useMemo(() =>
@@ -522,33 +533,47 @@ export default function PartnerBusinessPage() {
 
   // ─── Exchange handlers ────────────────────────────────────────────────────
   function openAddExchange() {
-    setExEditId(null); setExCurrSent('USD'); setExAmtSent(''); setExCurrRecv('ARS')
-    setExAmtRecv(''); setExRate(''); setExMethod('efectivo'); setExDate(today())
-    setExNotes(''); setExError(''); setShowExForm(true)
+    setExEditId(null); setExSentBy('me'); setExSenderCurr('VES')
+    setExVesAmt(''); setExUsdAmt(''); setExMethod('pago_movil')
+    setExRef(''); setExDate(today()); setExNotes(''); setExError(''); setShowExForm(true)
   }
 
   function openEditExchange(e: Exchange) {
-    setExEditId(e.id); setExCurrSent(e.currency_sent); setExAmtSent(String(e.amount_sent))
-    setExCurrRecv(e.currency_received); setExAmtRecv(String(e.amount_received))
-    setExRate(e.exchange_rate ? String(e.exchange_rate) : '')
-    setExMethod(e.method ?? 'efectivo'); setExDate(e.date)
-    setExNotes(e.notes ?? ''); setExError(''); setShowExForm(true)
+    setExEditId(e.id)
+    setExSentBy(!e.sent_by || e.sent_by === userId ? 'me' : 'partner')
+    const senderCurr = e.currency_sent === 'VES' ? 'VES' : 'USD'
+    setExSenderCurr(senderCurr)
+    if (e.currency_sent === 'VES') {
+      setExVesAmt(String(e.amount_sent)); setExUsdAmt(String(e.amount_received))
+    } else {
+      setExUsdAmt(String(e.amount_sent)); setExVesAmt(String(e.amount_received))
+    }
+    setExMethod(e.method ?? 'pago_movil'); setExRef('')
+    setExDate(e.date); setExNotes(e.notes ?? ''); setExError(''); setShowExForm(true)
   }
 
   async function handleSaveExchange(ev: React.FormEvent) {
     ev.preventDefault(); setExError('')
-    const amtSent = parseFloat(exAmtSent)
-    const amtRecv = parseFloat(exAmtRecv)
-    if (!amtSent || amtSent <= 0) { setExError('Monto entregado inválido'); return }
-    if (!amtRecv || amtRecv <= 0) { setExError('Monto recibido inválido'); return }
-    const rate = parseFloat(exRate) || Math.round((amtRecv / amtSent) * 10000) / 10000
+    const vesAmt = parseFloat(exVesAmt)
+    const usdAmt = parseFloat(exUsdAmt)
+    if (!vesAmt || vesAmt <= 0) { setExError('Monto en VES inválido'); return }
+    if (!usdAmt || usdAmt <= 0) { setExError('Monto en USD inválido'); return }
+    // amount_sent = what the sender sends, amount_received = what the sender receives
+    const amtSent     = exSenderCurr === 'VES' ? vesAmt : usdAmt
+    const currSent    = exSenderCurr
+    const amtRecv     = exSenderCurr === 'VES' ? usdAmt : vesAmt
+    const currRecv    = exSenderCurr === 'VES' ? 'USD' : 'VES'
+    // Rate always expressed as VES per 1 USD
+    const rate        = Math.round((vesAmt / usdAmt) * 100) / 100
+    const sentById    = exSentBy === 'me' ? userId : (partner?.id ?? null)
+    const notesStr    = [exRef.trim() ? `Ref: ${exRef.trim()}` : '', exNotes.trim()].filter(Boolean).join(' · ') || null
     setExSaving(true)
     const payload = {
-      business_id: businessId, sent_by: userId,
-      amount_sent: amtSent, currency_sent: exCurrSent.toUpperCase().trim(),
-      amount_received: amtRecv, currency_received: exCurrRecv.toUpperCase().trim(),
+      business_id: businessId, sent_by: sentById,
+      amount_sent: amtSent, currency_sent: currSent,
+      amount_received: amtRecv, currency_received: currRecv,
       exchange_rate: rate, method: exMethod, date: exDate,
-      notes: exNotes.trim() || null, status: 'completada',
+      notes: notesStr, status: 'completada',
     }
     if (exEditId) {
       const { error } = await supabase.from('business_exchanges').update(payload).eq('id', exEditId)
@@ -748,69 +773,94 @@ export default function PartnerBusinessPage() {
           )}
 
           {/* ── CAMBIO: exchange summary ──────────────────────────────────── */}
-          {business.type === 'cambio' && (
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5 text-center">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Hoy</p>
-                  <p className="text-3xl font-black text-gray-900">{cambioMetrics?.todayCount ?? 0}</p>
-                  <p className="text-[10px] text-gray-400">operaciones</p>
-                </div>
-                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5 text-center">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Este mes</p>
-                  <p className="text-3xl font-black text-gray-900">{cambioMetrics?.monthCount ?? 0}</p>
-                  <p className="text-[10px] text-gray-400">operaciones</p>
-                </div>
-              </div>
-
-              {cambioMetrics && Object.keys(cambioMetrics.byPair).length > 0 && (
-                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4 space-y-3">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Flujo del mes</p>
-                  {Object.entries(cambioMetrics.byPair).map(([pair, data]) => (
-                    <div key={pair} className="flex items-center justify-between">
-                      <span className="text-sm font-bold text-gray-800">{pair}</span>
-                      <div className="text-right">
-                        <p className="text-xs font-semibold text-gray-600">{data.count} op{data.count !== 1 ? 's' : ''}</p>
-                        <p className="text-[10px] text-gray-400">
-                          Tasa ≈ {data.sent > 0 ? (data.recv / data.sent).toFixed(2) : '—'}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {!isPending && totalCap > 0 && (
-                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Distribución de ganancia</p>
-                  <div className="space-y-2">
-                    {[
-                      { label: 'Tu parte', amount: myProfitShare, pct: isOwner ? ownerShare : memberProfitShare },
-                      { label: displayName(partner), amount: partnerProfitAmt, pct: partnerProfitShare },
-                    ].map(row => (
-                      <div key={row.label} className="flex items-center justify-between">
-                        <div className="flex-1 min-w-0">
-                          <span className="text-sm text-gray-600 truncate block">{row.label}</span>
-                          <span className="text-[10px] text-gray-400">{row.pct}%</span>
-                        </div>
-                        <span className={`font-bold text-sm ml-3 ${row.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                          {fmt(row.amount)}
-                        </span>
-                      </div>
-                    ))}
+          {business.type === 'cambio' && (() => {
+            const m = cambioMetrics
+            const myName      = 'Yo'
+            const partnerName = displayName(partner)
+            const METHOD_EMOJI: Record<string, string> = {
+              pago_movil: '📱', zelle: '🟢', efectivo: '💵', transferencia: '🏦',
+            }
+            return (
+              <>
+                {/* Contador hoy / este mes */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5 text-center">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Hoy</p>
+                    <p className="text-3xl font-black text-gray-900">{m?.todayCount ?? 0}</p>
+                    <p className="text-[10px] text-gray-400">operaciones</p>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5 text-center">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Este mes</p>
+                    <p className="text-3xl font-black text-gray-900">{m?.monthCount ?? 0}</p>
+                    <p className="text-[10px] text-gray-400">operaciones</p>
                   </div>
                 </div>
-              )}
 
-              <button
-                onClick={() => { setTab('movimientos'); openAddExchange() }}
-                className="w-full py-4 rounded-2xl font-bold text-white text-sm flex items-center justify-center gap-2 active:opacity-90"
-                style={{ backgroundColor: business.color }}
-              >
-                <Plus size={16} strokeWidth={2.5} /> Nueva operación de cambio
-              </button>
-            </>
-          )}
+                {/* Flujo por persona (quién envió qué este mes) */}
+                {m && m.monthCount > 0 && (
+                  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Quién envió este mes</p>
+                    <div className="space-y-3">
+                      {[
+                        { name: myName,      usd: m.myUsdSent,      ves: m.myVesSent      },
+                        { name: partnerName, usd: m.partnerUsdSent, ves: m.partnerVesSent },
+                      ].map(row => (
+                        <div key={row.name} className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                            style={{ backgroundColor: business.color }}>
+                            {(row.name[0] ?? '?').toUpperCase()}
+                          </div>
+                          <span className="text-sm font-bold text-gray-700 flex-1">{row.name}</span>
+                          <div className="text-right">
+                            {row.usd > 0 && (
+                              <p className="text-sm font-bold text-emerald-600">
+                                ${row.usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                <span className="text-[10px] font-normal text-gray-400 ml-0.5">USD</span>
+                              </p>
+                            )}
+                            {row.ves > 0 && (
+                              <p className="text-[11px] text-gray-500">
+                                {row.ves.toLocaleString('es-VE')} VES
+                              </p>
+                            )}
+                            {row.usd === 0 && row.ves === 0 && (
+                              <p className="text-xs text-gray-300">Sin envíos</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Desglose por método */}
+                {m && m.monthCount > 0 && Object.keys(m.byMethod).length > 0 && (
+                  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2.5">Por método</p>
+                    <div className="flex gap-2 flex-wrap">
+                      {Object.entries(m.byMethod).map(([method, count]) => (
+                        <div key={method} className="flex items-center gap-1.5 bg-gray-50 rounded-xl px-3 py-1.5">
+                          <span>{METHOD_EMOJI[method] ?? '💱'}</span>
+                          <span className="text-xs font-bold text-gray-600">
+                            {method === 'pago_movil' ? 'Pago Móvil' : method.charAt(0).toUpperCase() + method.slice(1)}
+                          </span>
+                          <span className="text-xs text-gray-400 font-medium">×{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => { setTab('movimientos'); openAddExchange() }}
+                  className="w-full py-4 rounded-2xl font-bold text-white text-sm flex items-center justify-center gap-2 active:opacity-90"
+                  style={{ backgroundColor: business.color }}
+                >
+                  <Plus size={16} strokeWidth={2.5} /> Nueva operación de cambio
+                </button>
+              </>
+            )
+          })()}
 
           {/* ── Tareas — visible for ALL business types ─────────────── */}
           <a href={`/partners/${partnerId}/${businessId}/todos`}
@@ -1025,43 +1075,71 @@ export default function PartnerBusinessPage() {
           ) : (
             <div className="space-y-2">
               {filteredExchanges.map(ex => {
-                const isMine = !ex.sent_by || ex.sent_by === userId
-                const impliedRate = Number(ex.amount_sent) > 0
-                  ? Number(ex.amount_received) / Number(ex.amount_sent)
-                  : 0
+                const isMine   = !ex.sent_by || ex.sent_by === userId
+                const senderName   = isMine ? 'Yo' : displayName(partner)
+                const receiverName = isMine ? displayName(partner) : 'Yo'
+                const senderInit   = (senderName[0] ?? '?').toUpperCase()
+                const receiverInit = (receiverName[0] ?? '?').toUpperCase()
+                // Compute VES and USD amounts regardless of sent/received direction
+                const vesAmt = ex.currency_sent === 'VES' ? Number(ex.amount_sent) : Number(ex.amount_received)
+                const usdAmt = ex.currency_sent === 'USD' ? Number(ex.amount_sent) : Number(ex.amount_received)
+                const rate = ex.exchange_rate ?? (vesAmt > 0 && usdAmt > 0 ? Math.round(vesAmt / usdAmt) : 0)
+                const METHOD_LABEL: Record<string, string> = {
+                  pago_movil: '📱 Pago Móvil', zelle: '🟢 Zelle',
+                  efectivo: '💵 Efectivo', transferencia: '🏦 Transf.',
+                }
+                const methodLabel = ex.method ? (METHOD_LABEL[ex.method] ?? ex.method) : null
                 return (
                   <div key={ex.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
-                        style={{ backgroundColor: business.color + '18' }}>
-                        <ArrowLeftRight size={16} style={{ color: business.color }} strokeWidth={2} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-baseline gap-1.5 flex-wrap">
-                          <span className="font-bold text-gray-900 text-[15px]">
-                            {Number(ex.amount_sent).toLocaleString()}
-                            <span className="text-xs font-semibold text-gray-500 ml-0.5">{ex.currency_sent}</span>
-                          </span>
-                          <span className="text-gray-400 text-sm">→</span>
-                          <span className="font-bold text-[15px]" style={{ color: business.color }}>
-                            {Number(ex.amount_received).toLocaleString()}
-                            <span className="text-xs font-semibold ml-0.5">{ex.currency_received}</span>
-                          </span>
+                    {/* Top row: avatars + method badge */}
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        {/* Sender avatar */}
+                        <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white"
+                          style={{ backgroundColor: isMine ? business.color : '#6b7280' }}>
+                          {senderInit}
                         </div>
-                        <p className="text-xs text-gray-400 mt-0.5">
-                          {fmtDate(ex.date)}
-                          {' · '}tasa {(ex.exchange_rate ?? impliedRate).toFixed(2)}
-                          {ex.method ? ` · ${ex.method}` : ''}
-                          {!isMine ? ` · ${displayName(partner)}` : ''}
-                          {ex.notes ? ` · ${ex.notes}` : ''}
-                        </p>
+                        <span className="text-gray-300 text-xs">→</span>
+                        {/* Receiver avatar */}
+                        <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white"
+                          style={{ backgroundColor: isMine ? '#6b7280' : business.color }}>
+                          {receiverInit}
+                        </div>
+                        <span className="text-xs text-gray-500 ml-1 font-medium">
+                          {senderName} → {receiverName}
+                        </span>
                       </div>
-                      <div className="flex gap-0.5 flex-shrink-0">
-                        <button onClick={() => openEditExchange(ex)} className="text-gray-300 p-1.5">
-                          <Pencil size={13} />
+                      {methodLabel && (
+                        <span className="text-[11px] font-bold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-lg">
+                          {methodLabel}
+                        </span>
+                      )}
+                    </div>
+                    {/* Amounts */}
+                    <div className="flex items-baseline gap-2 mb-1">
+                      <span className="text-xl font-black text-gray-900">
+                        {vesAmt.toLocaleString('es-VE')}
+                        <span className="text-xs font-bold text-gray-400 ml-1">VES</span>
+                      </span>
+                      <span className="text-gray-300 text-sm">=</span>
+                      <span className="text-xl font-black" style={{ color: business.color }}>
+                        ${usdAmt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        <span className="text-xs font-bold ml-1 opacity-70">USD</span>
+                      </span>
+                    </div>
+                    {/* Rate + notes + date */}
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] text-gray-400">
+                        1 USD = {rate.toLocaleString()} VES
+                        {ex.notes ? <span className="ml-2 text-gray-500 font-medium">{ex.notes}</span> : null}
+                      </p>
+                      <div className="flex items-center gap-0.5">
+                        <span className="text-[10px] text-gray-300 mr-1">{fmtDate(ex.date)}</span>
+                        <button onClick={() => openEditExchange(ex)} className="text-gray-300 p-1.5 active:text-blue-500">
+                          <Pencil size={12} />
                         </button>
-                        <button onClick={() => handleDeleteExchange(ex)} className="text-gray-300 p-1.5">
-                          <Trash2 size={13} />
+                        <button onClick={() => handleDeleteExchange(ex)} className="text-gray-300 p-1.5 active:text-red-500">
+                          <Trash2 size={12} />
                         </button>
                       </div>
                     </div>
@@ -1601,115 +1679,182 @@ export default function PartnerBusinessPage() {
       )}
 
       {/* ══════════════ MODAL: Operación de cambio ══════════════ */}
-      {showExForm && business.type === 'cambio' && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowExForm(false)}>
-          <div className="bg-white w-full rounded-t-3xl shadow-2xl flex flex-col" style={{ maxHeight: '90vh' }}
-            onClick={e => e.stopPropagation()}>
-            <div className="flex-shrink-0 px-5 pt-3 pb-2">
-              <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3" />
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-gray-900">
-                  {exEditId ? 'Editar' : 'Nueva'} operación de cambio
-                </h2>
-                <button onClick={() => setShowExForm(false)} className="p-1 text-gray-400"><X size={20} /></button>
-              </div>
-            </div>
-
-            <form id="ex-form" onSubmit={handleSaveExchange} className="flex-1 overflow-y-auto px-5 pt-2 pb-4 space-y-4">
-              {exError && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-xl">{exError}</p>}
-
-              {/* El cliente entrega */}
-              <div>
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">
-                  El cliente entrega
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="number" required min="0.01" step="any" placeholder="0.00"
-                    value={exAmtSent} onChange={e => setExAmtSent(e.target.value)}
-                    className="flex-1 bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                  />
-                  <select
-                    value={exCurrSent} onChange={e => setExCurrSent(e.target.value)}
-                    className="w-24 bg-gray-50 border border-gray-200 rounded-2xl px-2 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                  >
-                    {['USD','ARS','BRL','EUR','PYG','BOB','UYU','CLP'].map(c => <option key={c}>{c}</option>)}
-                  </select>
+      {showExForm && business.type === 'cambio' && (() => {
+        const myName      = 'Yo'
+        const partnerName = displayName(partner)
+        const vesNum = parseFloat(exVesAmt) || 0
+        const usdNum = parseFloat(exUsdAmt) || 0
+        const impliedRate = usdNum > 0 ? Math.round(vesNum / usdNum) : 0
+        const METHODS = [
+          { key: 'pago_movil',    label: 'Pago Móvil',  emoji: '📱' },
+          { key: 'zelle',         label: 'Zelle',        emoji: '🟢' },
+          { key: 'efectivo',      label: 'Efectivo',     emoji: '💵' },
+          { key: 'transferencia', label: 'Transferencia',emoji: '🏦' },
+        ]
+        return (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-end" onClick={() => setShowExForm(false)}>
+            <div className="bg-white w-full rounded-t-3xl shadow-2xl flex flex-col" style={{ maxHeight: '92vh' }}
+              onClick={e => e.stopPropagation()}>
+              <div className="flex-shrink-0 px-5 pt-3 pb-2">
+                <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3" />
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-bold text-gray-900">
+                    {exEditId ? 'Editar' : 'Nueva'} operación
+                  </h2>
+                  <button onClick={() => setShowExForm(false)} className="p-1 text-gray-400"><X size={20} /></button>
                 </div>
               </div>
 
-              {/* El cliente recibe */}
-              <div>
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">
-                  El cliente recibe
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="number" required min="0.01" step="any" placeholder="0.00"
-                    value={exAmtRecv} onChange={e => setExAmtRecv(e.target.value)}
-                    className="flex-1 bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                  />
-                  <select
-                    value={exCurrRecv} onChange={e => setExCurrRecv(e.target.value)}
-                    className="w-24 bg-gray-50 border border-gray-200 rounded-2xl px-2 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                  >
-                    {['ARS','USD','BRL','EUR','PYG','BOB','UYU','CLP'].map(c => <option key={c}>{c}</option>)}
-                  </select>
+              <form id="ex-form" onSubmit={handleSaveExchange} className="flex-1 overflow-y-auto px-5 pt-2 pb-4 space-y-5">
+                {exError && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-xl">{exError}</p>}
+
+                {/* ── ¿Quién envía? ── */}
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">¿Quién envía?</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { key: 'me',      name: myName,      sub: 'Tú' },
+                      { key: 'partner', name: partnerName, sub: 'Socio' },
+                    ].map(opt => (
+                      <button key={opt.key} type="button" onClick={() => setExSentBy(opt.key as 'me' | 'partner')}
+                        className={`flex items-center gap-2.5 px-3 py-3 rounded-2xl border-2 transition-all ${
+                          exSentBy === opt.key
+                            ? 'border-orange-500 bg-orange-50'
+                            : 'border-gray-200 bg-gray-50'
+                        }`}>
+                        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-white flex-shrink-0 ${
+                          exSentBy === opt.key ? '' : 'opacity-50'
+                        }`} style={{ backgroundColor: business.color }}>
+                          {(opt.name[0] ?? '?').toUpperCase()}
+                        </div>
+                        <div className="text-left min-w-0">
+                          <p className={`text-sm font-bold truncate ${exSentBy === opt.key ? 'text-orange-700' : 'text-gray-500'}`}>
+                            {opt.name}
+                          </p>
+                          <p className="text-[10px] text-gray-400">{opt.sub}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                {exAmtSent && exAmtRecv && parseFloat(exAmtSent) > 0 && (
-                  <p className="text-xs text-gray-400 mt-1.5 ml-1">
-                    Tasa implícita: {(parseFloat(exAmtRecv) / parseFloat(exAmtSent)).toFixed(4)} {exCurrRecv}/{exCurrSent}
+
+                {/* ── Montos VES / USD ── */}
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">Montos del cambio</label>
+                  <div className="space-y-2">
+                    {/* VES */}
+                    <div className={`flex items-center gap-2 bg-gray-50 border-2 rounded-2xl px-4 py-3 transition-all ${
+                      exSenderCurr === 'VES' ? 'border-orange-400' : 'border-gray-200'
+                    }`}>
+                      <button type="button" onClick={() => setExSenderCurr('VES')}
+                        className={`text-xs font-black w-14 py-1 rounded-xl flex-shrink-0 ${
+                          exSenderCurr === 'VES' ? 'text-white' : 'bg-gray-200 text-gray-500'
+                        }`} style={exSenderCurr === 'VES' ? { backgroundColor: business.color } : {}}>
+                        VES
+                      </button>
+                      <input
+                        type="number" required min="0.01" step="any" placeholder="0"
+                        value={exVesAmt} onChange={e => setExVesAmt(e.target.value)}
+                        className="flex-1 bg-transparent text-right text-[17px] font-bold text-gray-900 focus:outline-none"
+                      />
+                      {exSenderCurr === 'VES' && (
+                        <span className="text-[10px] text-orange-500 font-bold flex-shrink-0">ENVÍA</span>
+                      )}
+                    </div>
+                    {/* Rate display */}
+                    <div className="flex items-center justify-center gap-2 py-0.5">
+                      <div className="h-px flex-1 bg-gray-200" />
+                      <span className="text-[11px] text-gray-400 font-medium">
+                        {impliedRate > 0 ? `1 USD = ${impliedRate.toLocaleString()} VES` : '⇅ tasa de cambio'}
+                      </span>
+                      <div className="h-px flex-1 bg-gray-200" />
+                    </div>
+                    {/* USD */}
+                    <div className={`flex items-center gap-2 bg-gray-50 border-2 rounded-2xl px-4 py-3 transition-all ${
+                      exSenderCurr === 'USD' ? 'border-orange-400' : 'border-gray-200'
+                    }`}>
+                      <button type="button" onClick={() => setExSenderCurr('USD')}
+                        className={`text-xs font-black w-14 py-1 rounded-xl flex-shrink-0 ${
+                          exSenderCurr === 'USD' ? 'text-white' : 'bg-gray-200 text-gray-500'
+                        }`} style={exSenderCurr === 'USD' ? { backgroundColor: business.color } : {}}>
+                        USD
+                      </button>
+                      <input
+                        type="number" required min="0.01" step="any" placeholder="0.00"
+                        value={exUsdAmt} onChange={e => setExUsdAmt(e.target.value)}
+                        className="flex-1 bg-transparent text-right text-[17px] font-bold text-gray-900 focus:outline-none"
+                      />
+                      {exSenderCurr === 'USD' && (
+                        <span className="text-[10px] text-orange-500 font-bold flex-shrink-0">ENVÍA</span>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-2 ml-1">
+                    Toca <span className="font-bold">VES</span> o <span className="font-bold">USD</span> para indicar qué moneda envía {exSentBy === 'me' ? myName : partnerName}
                   </p>
-                )}
-              </div>
-
-              {/* Método */}
-              <div>
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">Método</label>
-                <div className="flex gap-2 flex-wrap">
-                  {['efectivo', 'transferencia', 'tarjeta'].map(m => (
-                    <button key={m} type="button" onClick={() => setExMethod(m)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize transition-all ${
-                        exMethod === m ? 'text-white' : 'bg-gray-100 text-gray-500'
-                      }`}
-                      style={exMethod === m ? { backgroundColor: business.color } : {}}
-                    >
-                      {m}
-                    </button>
-                  ))}
                 </div>
-              </div>
 
-              {/* Fecha + Notas */}
-              <div className="flex gap-2">
-                <div className="flex-1">
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Fecha</label>
-                  <input type="date" required value={exDate} onChange={e => setExDate(e.target.value)}
-                    className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                {/* ── Método ── */}
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">Método de pago</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {METHODS.map(m => (
+                      <button key={m.key} type="button" onClick={() => setExMethod(m.key)}
+                        className={`flex items-center gap-2 px-3 py-2.5 rounded-2xl border-2 transition-all ${
+                          exMethod === m.key ? 'border-orange-500 bg-orange-50' : 'border-gray-200 bg-gray-50'
+                        }`}>
+                        <span className="text-lg">{m.emoji}</span>
+                        <span className={`text-sm font-bold ${exMethod === m.key ? 'text-orange-700' : 'text-gray-500'}`}>
+                          {m.label}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div className="flex-1">
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Notas</label>
-                  <input type="text" placeholder="Opcional" value={exNotes} onChange={e => setExNotes(e.target.value)}
-                    className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
-                </div>
-              </div>
-            </form>
 
-            <div className="flex-shrink-0 px-5 py-4 border-t border-gray-100 flex gap-2"
-              style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
-              <button type="button" onClick={() => setShowExForm(false)}
-                className="w-24 border-2 border-gray-200 text-gray-600 font-semibold py-4 rounded-2xl text-sm flex-shrink-0">
-                Cancelar
-              </button>
-              <button form="ex-form" type="submit" disabled={exSaving}
-                className="flex-1 text-white font-bold py-4 rounded-2xl text-[15px] shadow-sm disabled:opacity-60"
-                style={{ backgroundColor: business.color }}>
-                {exSaving ? 'Guardando…' : exEditId ? 'Actualizar' : 'Registrar operación'}
-              </button>
+                {/* ── Referencia + Fecha ── */}
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">
+                      Referencia / Confirmación
+                      <span className="font-normal normal-case ml-1">(N° de operación, opcional)</span>
+                    </label>
+                    <input type="text" placeholder="Ej: PM12345678 / ZELLE-9ABC"
+                      value={exRef} onChange={e => setExRef(e.target.value)}
+                      className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Fecha</label>
+                      <input type="date" required value={exDate} onChange={e => setExDate(e.target.value)}
+                        className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Notas</label>
+                      <input type="text" placeholder="Opcional" value={exNotes} onChange={e => setExNotes(e.target.value)}
+                        className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                    </div>
+                  </div>
+                </div>
+              </form>
+
+              <div className="flex-shrink-0 px-5 py-4 border-t border-gray-100 flex gap-2"
+                style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
+                <button type="button" onClick={() => setShowExForm(false)}
+                  className="w-24 border-2 border-gray-200 text-gray-600 font-semibold py-4 rounded-2xl text-sm flex-shrink-0">
+                  Cancelar
+                </button>
+                <button form="ex-form" type="submit" disabled={exSaving}
+                  className="flex-1 text-white font-bold py-4 rounded-2xl text-[15px] shadow-sm disabled:opacity-60"
+                  style={{ backgroundColor: business.color }}>
+                  {exSaving ? 'Guardando…' : exEditId ? 'Actualizar' : 'Registrar operación'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* ══════════════ MODAL: Ver recibo ══════════════ */}
       {viewReceipt && (
