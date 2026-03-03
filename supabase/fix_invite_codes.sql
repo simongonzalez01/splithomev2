@@ -17,9 +17,22 @@ ALTER TABLE public.profiles
 CREATE INDEX IF NOT EXISTS profiles_user_id_idx   ON public.profiles(user_id);
 CREATE INDEX IF NOT EXISTS profiles_family_id_idx ON public.profiles(family_id);
 
--- ── 3. Sincronizar user_id ─────────────────────────────────────────────────
---    Si la tabla se creó con id = auth.users.id (esquema de fase1_socios),
---    copiamos id → user_id donde sea necesario.
+-- ── 3. Limpiar filas duplicadas antes de sincronizar user_id ──────────────
+--    Pueden existir dos filas para el mismo usuario:
+--      - Fila A: id=UUID_aleatorio, user_id=auth_uuid  (trigger original)
+--      - Fila B: id=auth_uuid,      user_id=NULL       (trigger de fase1)
+--    La fila B es huérfana: ya existe la fila A con el user_id correcto.
+--    Hay que borrar la B antes de intentar hacer UPDATE, o se viola
+--    la constraint UNIQUE de user_id.
+DELETE FROM public.profiles p
+WHERE  p.user_id IS NULL
+  AND  EXISTS (
+    SELECT 1 FROM public.profiles p2
+    WHERE p2.user_id = p.id       -- ya hay una fila con ese user_id
+  );
+
+-- ── 3b. Sincronizar user_id en filas que aún lo necesitan ─────────────────
+--    (solo aplica al esquema de fase1 donde id = auth.users.id)
 UPDATE public.profiles p
 SET    user_id = p.id
 WHERE  p.user_id IS NULL
