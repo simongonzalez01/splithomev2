@@ -3,13 +3,14 @@
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { Plus, Store, X, Check, ArrowRight, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Store, X, Check, ArrowRight, Pencil, Trash2, ArrowLeftRight } from 'lucide-react'
 
 type Business = {
   id: string
   name: string
   description: string | null
   color: string
+  type: 'ventas' | 'cambio'
   created_at: string
 }
 
@@ -30,6 +31,7 @@ export default function BusinessPage() {
   const [name,      setName]      = useState('')
   const [desc,      setDesc]      = useState('')
   const [color,     setColor]     = useState(COLORS[0])
+  const [bizType,   setBizType]   = useState<'ventas' | 'cambio'>('ventas')
   const [saving,    setSaving]    = useState(false)
   const [formError, setFormError] = useState('')
 
@@ -49,20 +51,20 @@ export default function BusinessPage() {
   useEffect(() => { load() }, [load])
 
   function openAdd() {
-    setEditId(null); setName(''); setDesc(''); setColor(COLORS[0])
+    setEditId(null); setName(''); setDesc(''); setColor(COLORS[0]); setBizType('ventas')
     setFormError(''); setShowForm(true)
   }
 
   function openEdit(b: Business) {
     setEditId(b.id); setName(b.name); setDesc(b.description ?? '')
-    setColor(b.color); setFormError(''); setShowForm(true)
+    setColor(b.color); setBizType(b.type ?? 'ventas'); setFormError(''); setShowForm(true)
   }
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault(); setFormError('')
     if (!name.trim()) { setFormError('El nombre es requerido'); return }
     setSaving(true)
-    const payload = { name: name.trim(), description: desc.trim() || null, color }
+    const payload = { name: name.trim(), description: desc.trim() || null, color, type: bizType }
     if (editId) {
       const { error } = await supabase.from('businesses').update(payload).eq('id', editId)
       if (error) { setFormError(error.message); setSaving(false); return }
@@ -129,7 +131,9 @@ export default function BusinessPage() {
                   className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0"
                   style={{ backgroundColor: b.color + '22' }}
                 >
-                  <Store size={22} style={{ color: b.color }} strokeWidth={1.8} />
+                  {b.type === 'cambio'
+                    ? <ArrowLeftRight size={22} style={{ color: b.color }} strokeWidth={1.8} />
+                    : <Store size={22} style={{ color: b.color }} strokeWidth={1.8} />}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="font-bold text-gray-900 text-[15px]">{b.name}</p>
@@ -195,6 +199,43 @@ export default function BusinessPage() {
                   onChange={e => setDesc(e.target.value)}
                   className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:bg-white transition-colors"
                 />
+              </div>
+
+              {/* Tipo de negocio */}
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2.5 block">Tipo de negocio</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBizType('ventas')}
+                    className={`flex flex-col items-center gap-2 py-4 rounded-2xl border-2 transition-all ${
+                      bizType === 'ventas'
+                        ? 'border-orange-500 bg-orange-50'
+                        : 'border-gray-200 bg-gray-50'
+                    }`}
+                  >
+                    <Store size={24} className={bizType === 'ventas' ? 'text-orange-500' : 'text-gray-400'} strokeWidth={1.8} />
+                    <span className={`text-sm font-bold ${bizType === 'ventas' ? 'text-orange-600' : 'text-gray-400'}`}>Ventas</span>
+                    <span className={`text-[10px] text-center leading-tight px-1 ${bizType === 'ventas' ? 'text-orange-400' : 'text-gray-300'}`}>
+                      Inventario, ventas y gastos
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBizType('cambio')}
+                    className={`flex flex-col items-center gap-2 py-4 rounded-2xl border-2 transition-all ${
+                      bizType === 'cambio'
+                        ? 'border-orange-500 bg-orange-50'
+                        : 'border-gray-200 bg-gray-50'
+                    }`}
+                  >
+                    <ArrowLeftRight size={24} className={bizType === 'cambio' ? 'text-orange-500' : 'text-gray-400'} strokeWidth={1.8} />
+                    <span className={`text-sm font-bold ${bizType === 'cambio' ? 'text-orange-600' : 'text-gray-400'}`}>Cambio</span>
+                    <span className={`text-[10px] text-center leading-tight px-1 ${bizType === 'cambio' ? 'text-orange-400' : 'text-gray-300'}`}>
+                      Cambio de divisas
+                    </span>
+                  </button>
+                </div>
               </div>
 
               <div>
