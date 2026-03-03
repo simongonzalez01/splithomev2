@@ -9,7 +9,13 @@ import {
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type Profile = { id: string; email: string | null; full_name: string | null }
+type Profile = {
+  id: string
+  user_id: string
+  email: string | null
+  full_name: string | null
+  display_name: string | null
+}
 
 type SharedBusiness = {
   id: string; name: string; color: string; type: 'ventas' | 'cambio'
@@ -29,11 +35,11 @@ function generateCode() {
 
 function displayName(p: Profile | null) {
   if (!p) return 'Sin nombre'
-  return p.full_name || p.email || 'Socio'
+  return p.full_name || p.display_name || p.email || 'Socio'
 }
 
 function initials(p: Profile | null) {
-  const name = p?.full_name || p?.email || 'S'
+  const name = p?.full_name || p?.display_name || p?.email || 'S'
   return name.slice(0, 2).toUpperCase()
 }
 
@@ -125,14 +131,16 @@ export default function PartnersPage() {
     }
 
     // Obtener perfiles de socios reales
+    // partnerIds son auth.users.id → buscar por user_id (no por id del perfil)
     const partnerIds = Object.keys(map).filter(k => k !== '__pending__')
     if (partnerIds.length > 0) {
       const { data: profiles } = await supabase
         .from('profiles')
-        .select('id, email, full_name')
-        .in('id', partnerIds)
+        .select('id, user_id, email, full_name, display_name')
+        .in('user_id', partnerIds)
       for (const p of (profiles ?? [])) {
-        if (map[p.id]) map[p.id].partnerProfile = p
+        const key = p.user_id ?? p.id  // user_id es el auth UUID
+        if (map[key]) map[key].partnerProfile = p
       }
     }
 
@@ -313,7 +321,7 @@ export default function PartnersPage() {
                   )}
                 </div>
                 <Link
-                  href={`/partners/${group.partner.id}`}
+                  href={`/partners/${group.partner.user_id ?? group.partner.id}`}
                   className="ml-auto text-xs font-semibold text-orange-500 flex items-center gap-1"
                 >
                   Ver resumen <ArrowRight size={12} />
@@ -337,7 +345,7 @@ export default function PartnersPage() {
                 <BusinessCard
                   key={biz.id}
                   biz={biz}
-                  partnerId={group.partner?.id ?? null}
+                  partnerId={group.partner ? (group.partner.user_id ?? group.partner.id) : null}
                   isOwner={biz.user_id === userId}
                   copied={copied}
                   onCopy={copyCode}
