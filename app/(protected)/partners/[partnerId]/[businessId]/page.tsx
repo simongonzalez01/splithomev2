@@ -7,7 +7,7 @@ import {
   ArrowLeft, Plus, X, Pencil, Trash2, TrendingUp, TrendingDown,
   Package, DollarSign, AlertTriangle, Camera, Image as ImageIcon,
   Check, Users, ShieldCheck, Clock, CreditCard, ChevronDown,
-  Store, ArrowLeftRight, Wallet,
+  Store, ArrowLeftRight, Wallet, ChevronRight,
 } from 'lucide-react'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -943,6 +943,17 @@ export default function PartnerBusinessPage() {
             </div>
             <Plus size={16} className="text-purple-400 ml-auto" />
           </button>
+
+          {/* Link a Pedidos */}
+          <a href={`/partners/${partnerId}/${businessId}/pedidos`}
+            className="w-full bg-orange-50 border border-orange-100 rounded-2xl px-4 py-3.5 text-left flex items-center gap-3 active:opacity-80">
+            <Package size={20} className="text-orange-400" />
+            <div>
+              <p className="text-sm font-bold text-orange-700">Pedidos & Proveedores</p>
+              <p className="text-xs text-gray-400">Órdenes de compra e importaciones</p>
+            </div>
+            <ChevronRight size={16} className="text-orange-400 ml-auto" />
+          </a>
         </div>
       )}
 
