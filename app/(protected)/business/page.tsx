@@ -122,7 +122,7 @@ export default function BusinessPage() {
           businesses.map(b => (
             <div key={b.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm">
               <Link
-                href={`/business/${b.id}`}
+                href={`/partners/solo/${b.id}`}
                 className="px-4 py-4 flex items-center gap-3 active:bg-gray-50"
               >
                 <div

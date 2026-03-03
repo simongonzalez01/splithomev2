@@ -182,7 +182,7 @@ export default function PartnerBusinessPage() {
     setIsOwner(ownerFlag)
 
     // Partner profile
-    if (partnerId !== 'pending') {
+    if (partnerId !== 'pending' && partnerId !== 'solo') {
       const { data: prof } = await supabase.from('profiles').select('id,email,full_name').eq('id', partnerId).maybeSingle()
       setPartner(prof as Profile | null)
     }
@@ -590,7 +590,9 @@ export default function PartnerBusinessPage() {
   )
   if (!business) return null
 
-  const isPending = partnerId === 'pending'
+  // 'pending' = tiene invite code pero sin socio aún
+  // 'solo'    = negocio propio sin socio (redirigido desde /business)
+  const isPending = partnerId === 'pending' || partnerId === 'solo'
   const tabs = business.type === 'cambio'
     ? (['dashboard', 'movimientos', 'socios', 'chat'] as const)
     : (['dashboard', 'inventario', 'movimientos', 'socios', 'chat'] as const)
