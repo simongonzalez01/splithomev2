@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   Home, Receipt, CalendarClock, ShoppingCart, CircleUser, TrendingUp,
-  LayoutDashboard, Wallet, ArrowLeftRight, Store, Bell, Handshake, Banknote,
+  LayoutDashboard, Wallet, ArrowLeftRight, Store, Bell, Banknote,
 } from 'lucide-react'
 import { useAppMode } from '@/contexts/AppModeContext'
 
@@ -26,7 +26,6 @@ const PERSONAL_NAV = [
 
 const BUSINESS_NAV = [
   { href: '/business',  label: 'Negocios', Icon: Store      },
-  { href: '/partners',  label: 'Socios',   Icon: Handshake  },
   { href: '/tasas',     label: 'Tasas',    Icon: Banknote   },
   { href: '/profile',   label: 'Perfil',   Icon: CircleUser },
 ]
@@ -54,7 +53,7 @@ export default function BottomNav() {
       <div className="flex items-stretch max-w-screen-sm mx-auto">
         {nav.map(({ href, label, Icon }) => {
           const active = href === '/' || href === '/personal' || href === '/business'
-            ? pathname === href
+            ? pathname === href || (href === '/business' && mode === 'business' && pathname.startsWith('/partners'))
             : pathname.startsWith(href)
           return (
             <Link
