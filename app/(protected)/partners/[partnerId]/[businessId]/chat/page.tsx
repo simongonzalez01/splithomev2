@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { ArrowLeft, Send, Image as ImageIcon, FileText, X, Download } from 'lucide-react'
+import { useUnreadMessages } from '@/contexts/UnreadMessagesContext'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 const fmtTime = (s: string) =>
@@ -32,6 +33,8 @@ export default function ChatPage() {
   const { partnerId, businessId } = useParams<{ partnerId: string; businessId: string }>()
   const router   = useRouter()
   const supabase = createClient()
+
+  const { markRead } = useUnreadMessages()
 
   const [loading,       setLoading]       = useState(true)
   const [userId,        setUserId]        = useState('')
@@ -74,8 +77,9 @@ export default function ChatPage() {
 
     if (userIds.length) {
       const { data: profiles } = await supabase
-        .from('profiles').select('id,full_name,email').in('id', userIds)
-      if (profiles) setMembers(profiles as Profile[])
+        .from('profiles').select('user_id,full_name,email').in('user_id', userIds)
+      // Normalise: expose user_id as id so profileById() still works
+      if (profiles) setMembers(profiles.map(p => ({ id: p.user_id, full_name: p.full_name, email: p.email })) as Profile[])
     }
 
     await loadMessages()
@@ -101,6 +105,11 @@ export default function ChatPage() {
       .order('created_at', { ascending: true })
     if (data) setMessages(data as Message[])
   }
+
+  // ── Mark chat as read when page loads ─────────────────────────────────────
+  useEffect(() => {
+    if (!loading) markRead(businessId)
+  }, [businessId, loading, markRead])
 
   // ── scroll to bottom ──────────────────────────────────────────────────────
   useEffect(() => {

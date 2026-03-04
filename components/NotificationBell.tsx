@@ -3,11 +3,12 @@
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Bell, X, AlertCircle, CheckSquare, Clock, ShieldAlert } from 'lucide-react'
+import { Bell, X, CheckSquare, Clock, ShieldAlert, MessageCircle } from 'lucide-react'
+import { useUnreadMessages } from '@/contexts/UnreadMessagesContext'
 
 type NotifItem = {
   id: string
-  type: 'reminder' | 'todo' | 'verify'
+  type: 'reminder' | 'todo' | 'verify' | 'chat'
   title: string
   subtitle: string
   href: string
@@ -34,6 +35,8 @@ export default function NotificationBell() {
   const [items,  setItems]  = useState<NotifItem[]>([])
   const [userId, setUserId] = useState('')
   const [loaded, setLoaded] = useState(false)
+
+  const { totalUnread } = useUnreadMessages()
 
   useEffect(() => {
     loadNotifications()
@@ -161,9 +164,21 @@ export default function NotificationBell() {
     reminder: Clock,
     todo:     CheckSquare,
     verify:   ShieldAlert,
+    chat:     MessageCircle,
   }
 
-  const count = items.length
+  // Merge chat unread item with DB notifications
+  const chatItem: NotifItem | null = totalUnread > 0 ? {
+    id:       'chat-unread',
+    type:     'chat',
+    title:    `${totalUnread} mensaje${totalUnread > 1 ? 's' : ''} nuevo${totalUnread > 1 ? 's' : ''}`,
+    subtitle: 'Chat de negocios',
+    href:     '/business',
+    urgency:  'blue',
+  } : null
+
+  const allItems = chatItem ? [chatItem, ...items] : items
+  const count    = allItems.length
 
   return (
     <div className="relative" ref={panelRef}>
@@ -200,14 +215,14 @@ export default function NotificationBell() {
 
           {/* List */}
           <div className="max-h-80 overflow-y-auto">
-            {items.length === 0 ? (
+            {allItems.length === 0 ? (
               <div className="py-10 text-center">
                 <Bell size={28} className="text-gray-200 mx-auto mb-2" />
                 <p className="text-xs text-gray-400">Todo en orden ✓</p>
               </div>
             ) : (
               <div className="p-2 space-y-1.5">
-                {items.map(item => {
+                {allItems.map(item => {
                   const cfg  = urgencyConfig[item.urgency]
                   const Icon = TypeIcon[item.type]
                   return (
@@ -232,7 +247,7 @@ export default function NotificationBell() {
           </div>
 
           {/* Footer */}
-          {items.length > 0 && (
+          {allItems.length > 0 && (
             <div className="px-4 py-2.5 border-t border-gray-50">
               <button
                 onClick={() => { setItems([]); setOpen(false) }}

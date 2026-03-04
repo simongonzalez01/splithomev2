@@ -2,6 +2,7 @@
 
 import { Home } from 'lucide-react'
 import { AppModeProvider, useAppMode } from '@/contexts/AppModeContext'
+import { UnreadMessagesProvider } from '@/contexts/UnreadMessagesContext'
 import BottomNav from '@/components/BottomNav'
 import FAB from '@/components/FAB'
 import ModeSwitch from '@/components/ModeSwitch'
@@ -41,7 +42,9 @@ function ShellInner({ children }: { children: React.ReactNode }) {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <AppModeProvider>
-      <ShellInner>{children}</ShellInner>
+      <UnreadMessagesProvider>
+        <ShellInner>{children}</ShellInner>
+      </UnreadMessagesProvider>
     </AppModeProvider>
   )
 }

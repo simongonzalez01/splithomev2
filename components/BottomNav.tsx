@@ -7,6 +7,7 @@ import {
   LayoutDashboard, Wallet, ArrowLeftRight, Store, Bell, Banknote,
 } from 'lucide-react'
 import { useAppMode } from '@/contexts/AppModeContext'
+import { useUnreadMessages } from '@/contexts/UnreadMessagesContext'
 
 const HOME_NAV = [
   { href: '/',         label: 'Inicio',     Icon: Home          },
@@ -33,6 +34,7 @@ const BUSINESS_NAV = [
 export default function BottomNav() {
   const pathname = usePathname()
   const { mode } = useAppMode()
+  const { totalUnread } = useUnreadMessages()
 
   const nav = mode === 'personal' ? PERSONAL_NAV
             : mode === 'business' ? BUSINESS_NAV
@@ -61,7 +63,7 @@ export default function BottomNav() {
               href={href}
               className="flex-1 flex flex-col items-center justify-center py-2 min-h-[58px]"
             >
-              <div className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-2xl transition-all ${
+              <div className={`relative flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-2xl transition-all ${
                 active ? activeBg : ''
               }`}>
                 <Icon
@@ -69,6 +71,12 @@ export default function BottomNav() {
                   strokeWidth={active ? 2.2 : 1.6}
                   className={active ? activeText : 'text-gray-400'}
                 />
+                {/* Unread chat badge on Negocios tab */}
+                {href === '/business' && mode === 'business' && totalUnread > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-[9px] font-black rounded-full flex items-center justify-center leading-none">
+                    {totalUnread > 9 ? '9+' : totalUnread}
+                  </span>
+                )}
                 <span className={`text-[10px] font-semibold leading-none ${
                   active ? activeText : 'text-gray-400'
                 }`}>
