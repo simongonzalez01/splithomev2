@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { Plus, Store, X, Check, ArrowRight, Pencil, Trash2, ArrowLeftRight } from 'lucide-react'
+import { Plus, Store, X, Check, ArrowRight, Pencil, Trash2, ArrowLeftRight, UserPlus, Copy, Users } from 'lucide-react'
 
 type Business = {
   id: string
@@ -11,7 +11,14 @@ type Business = {
   description: string | null
   color: string
   type: 'ventas' | 'cambio'
+  invite_code: string | null
+  category: string | null
   created_at: string
+}
+
+function generateCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  return Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
 }
 
 const COLORS = [
@@ -24,6 +31,11 @@ export default function BusinessPage() {
   const [userId,     setUserId]     = useState<string | null>(null)
   const [businesses, setBusinesses] = useState<Business[]>([])
   const [loading,    setLoading]    = useState(true)
+
+  // Share with partner
+  const [sharingId,   setSharingId]   = useState<string | null>(null)
+  const [sharedCode,  setSharedCode]  = useState<{ bizId: string; code: string } | null>(null)
+  const [copiedCode,  setCopiedCode]  = useState(false)
 
   // Form
   const [showForm,  setShowForm]  = useState(false)
@@ -81,6 +93,31 @@ export default function BusinessPage() {
     setBusinesses(prev => prev.filter(x => x.id !== b.id))
   }
 
+  async function handleShare(b: Business) {
+    // Si ya tiene código, solo mostrarlo
+    if (b.invite_code) {
+      setSharedCode({ bizId: b.id, code: b.invite_code })
+      return
+    }
+    setSharingId(b.id)
+    const code = generateCode()
+    const { error } = await supabase
+      .from('businesses')
+      .update({ invite_code: code, category: 'partner' })
+      .eq('id', b.id)
+    setSharingId(null)
+    if (!error) {
+      setSharedCode({ bizId: b.id, code })
+      await load()
+    }
+  }
+
+  function copyCode(code: string) {
+    navigator.clipboard.writeText(code)
+    setCopiedCode(true)
+    setTimeout(() => setCopiedCode(false), 2000)
+  }
+
   if (loading) return (
     <div className="flex items-center justify-center h-64 text-gray-400 text-sm">Cargando…</div>
   )
@@ -122,7 +159,7 @@ export default function BusinessPage() {
           </div>
         ) : (
           businesses.map(b => (
-            <div key={b.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm">
+            <div key={b.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
               <Link
                 href={`/partners/solo/${b.id}`}
                 className="px-4 py-4 flex items-center gap-3 active:bg-gray-50"
@@ -140,23 +177,70 @@ export default function BusinessPage() {
                   {b.description && (
                     <p className="text-xs text-gray-400 truncate mt-0.5">{b.description}</p>
                   )}
+                  {b.invite_code && (
+                    <span className="inline-flex items-center gap-1 mt-0.5 text-[10px] font-semibold text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded-full">
+                      <Users size={9} /> Con socio
+                    </span>
+                  )}
                 </div>
-                <div className="flex items-center gap-3 flex-shrink-0">
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={e => { e.preventDefault(); handleShare(b) }}
+                    disabled={sharingId === b.id}
+                    className="text-gray-300 active:text-orange-500 p-1.5 rounded-lg active:bg-orange-50"
+                    title="Compartir con socio"
+                  >
+                    {sharingId === b.id
+                      ? <span className="text-[10px] text-orange-400">…</span>
+                      : <UserPlus size={14} />
+                    }
+                  </button>
                   <button
                     onClick={e => { e.preventDefault(); openEdit(b) }}
-                    className="text-gray-300 active:text-blue-500 p-1"
+                    className="text-gray-300 active:text-blue-500 p-1.5 rounded-lg active:bg-blue-50"
                   >
                     <Pencil size={14} />
                   </button>
                   <button
                     onClick={e => { e.preventDefault(); handleDelete(b) }}
-                    className="text-gray-300 active:text-red-500 p-1"
+                    className="text-gray-300 active:text-red-500 p-1.5 rounded-lg active:bg-red-50"
                   >
                     <Trash2 size={14} />
                   </button>
                   <ArrowRight size={16} className="text-gray-300" />
                 </div>
               </Link>
+
+              {/* Código de socio inline */}
+              {sharedCode?.bizId === b.id && (
+                <div className="border-t border-orange-50 bg-orange-50/60 px-4 py-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] font-bold text-orange-400 uppercase tracking-widest mb-0.5">
+                      Código para tu socio
+                    </p>
+                    <span className="font-mono text-lg font-bold text-gray-800 tracking-[0.25em]">
+                      {sharedCode.code}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => copyCode(sharedCode.code)}
+                      className="flex items-center gap-1.5 bg-orange-500 text-white text-xs font-bold px-3 py-2 rounded-xl active:opacity-80"
+                    >
+                      {copiedCode
+                        ? <><Check size={12} /> Copiado</>
+                        : <><Copy size={12} /> Copiar</>
+                      }
+                    </button>
+                    <button
+                      onClick={() => setSharedCode(null)}
+                      className="p-2 text-gray-400 active:text-gray-600"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ))
         )}

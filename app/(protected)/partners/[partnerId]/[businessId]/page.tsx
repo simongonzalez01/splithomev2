@@ -15,7 +15,7 @@ type Business = {
   id: string; name: string; description: string | null
   color: string; type: 'ventas' | 'cambio'; user_id: string
 }
-type Profile = { id: string; email: string | null; full_name: string | null }
+type Profile = { id: string; user_id?: string; email: string | null; full_name: string | null; display_name?: string | null }
 type Product = {
   id: string; name: string; unit: string
   cost_price: number; sale_price: number
@@ -51,8 +51,8 @@ const today = () => new Date().toISOString().split('T')[0]
 const mStart = () => new Date().toISOString().slice(0, 7)
 const fmtDate = (s: string) =>
   new Date(s + 'T12:00:00').toLocaleDateString('es', { weekday: 'short', day: 'numeric', month: 'short' })
-const displayName = (p: Profile | null | undefined) => p?.full_name || p?.email || 'Socio'
-const initials = (p: Profile | null | undefined) => (p?.full_name || p?.email || 'S').slice(0, 2).toUpperCase()
+const displayName = (p: Profile | null | undefined) => p?.full_name || p?.display_name || p?.email || 'Socio'
+const initials = (p: Profile | null | undefined) => (p?.full_name || p?.display_name || p?.email || 'S').slice(0, 2).toUpperCase()
 
 const TX_COLORS: Record<string, string> = {
   venta: 'text-emerald-600', compra: 'text-blue-600',
@@ -181,9 +181,13 @@ export default function PartnerBusinessPage() {
     setBusiness(biz)
     setIsOwner(ownerFlag)
 
-    // Partner profile
+    // Partner profile — partnerId is an auth user UUID, query by user_id
     if (partnerId !== 'pending' && partnerId !== 'solo') {
-      const { data: prof } = await supabase.from('profiles').select('id,email,full_name').eq('id', partnerId).maybeSingle()
+      const { data: prof } = await supabase
+        .from('profiles')
+        .select('id,user_id,email,full_name,display_name')
+        .eq('user_id', partnerId)
+        .maybeSingle()
       setPartner(prof as Profile | null)
     }
 
@@ -208,12 +212,15 @@ export default function PartnerBusinessPage() {
       setExchanges((exs ?? []) as Exchange[])
     }
 
-    // Members with profiles
+    // Members with profiles — ids are auth user UUIDs, query by user_id
     const { data: mems } = await supabase.from('business_members').select('*').eq('business_id', businessId)
     if (mems && mems.length > 0) {
       const ids = mems.map((m: Member) => m.user_id)
-      const { data: profiles } = await supabase.from('profiles').select('id,email,full_name').in('id', ids)
-      const profileMap = Object.fromEntries((profiles ?? []).map((p: Profile) => [p.id, p]))
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('id,user_id,email,full_name,display_name')
+        .in('user_id', ids)
+      const profileMap = Object.fromEntries((profiles ?? []).map((p: Profile) => [p.user_id ?? p.id, p]))
       setMembers(mems.map((m: Member) => ({ ...m, profile: profileMap[m.user_id] })))
     } else {
       setMembers([])

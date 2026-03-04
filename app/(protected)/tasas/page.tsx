@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { RefreshCw, ArrowUpDown, AlertCircle } from 'lucide-react'
+import { RefreshCw, ArrowUpDown, AlertCircle, Copy, Check } from 'lucide-react'
 
 interface Tasas {
   bcv: number | null
@@ -24,6 +24,7 @@ export default function TasasPage() {
   const [error, setError] = useState<string | null>(null)
   const [amount, setAmount] = useState('')
   const [direction, setDirection] = useState<'usd_to_ves' | 'ves_to_usd'>('usd_to_ves')
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
 
   const fetchTasas = useCallback(async () => {
     setLoading(true)
@@ -215,6 +216,19 @@ export default function TasasPage() {
             <div className="space-y-2">
               {rateCards.map(({ key, label, emoji, value, textColor }) => {
                 const result = calcConvert(value ?? null)
+                const resultText = result !== null
+                  ? direction === 'usd_to_ves'
+                    ? `${fmtVES(result)} Bs`
+                    : `$ ${fmtUSD(result)}`
+                  : null
+
+                function handleCopy() {
+                  if (!resultText) return
+                  navigator.clipboard.writeText(resultText)
+                  setCopiedKey(key)
+                  setTimeout(() => setCopiedKey(null), 2000)
+                }
+
                 return (
                   <div
                     key={key}
@@ -229,13 +243,23 @@ export default function TasasPage() {
                         </span>
                       )}
                     </span>
-                    <span className={`font-bold text-sm ${result !== null ? textColor : 'text-gray-300'}`}>
-                      {result !== null
-                        ? direction === 'usd_to_ves'
-                          ? `${fmtVES(result)} Bs`
-                          : `$ ${fmtUSD(result)}`
-                        : loading ? '…' : '—'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={`font-bold text-sm ${result !== null ? textColor : 'text-gray-300'}`}>
+                        {resultText ?? (loading ? '…' : '—')}
+                      </span>
+                      {resultText && (
+                        <button
+                          onClick={handleCopy}
+                          className="p-1 rounded-lg text-gray-300 active:text-orange-500 active:bg-orange-50 transition-colors"
+                          title="Copiar resultado"
+                        >
+                          {copiedKey === key
+                            ? <Check size={14} className="text-emerald-500" />
+                            : <Copy size={14} />
+                          }
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )
               })}

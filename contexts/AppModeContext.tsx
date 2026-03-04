@@ -21,6 +21,10 @@ export function AppModeProvider({ children }: { children: ReactNode }) {
     const saved = localStorage.getItem('splitHome_appMode') as AppMode | null
     if (saved && ['home', 'personal', 'business'].includes(saved)) {
       setModeState(saved)
+      // Si el usuario aterrizó en / (home) pero tenía otro modo guardado, redirigir
+      if (saved !== 'home' && window.location.pathname === '/') {
+        window.location.replace(saved === 'business' ? '/business' : '/personal')
+      }
     }
   }, [])
 
