@@ -626,14 +626,15 @@ export default function PartnerBusinessPage() {
   // 'solo'    = negocio propio sin socio (redirigido desde /business)
   const isPending = partnerId === 'pending' || partnerId === 'solo'
   const tabs = business.type === 'cambio'
-    ? (['dashboard', 'movimientos', 'socios', 'chat'] as const)
-    : (['dashboard', 'inventario', 'movimientos', 'socios', 'chat'] as const)
+    ? (['dashboard', 'movimientos', 'socios', 'imports', 'chat'] as const)
+    : (['dashboard', 'inventario', 'movimientos', 'socios', 'imports', 'chat'] as const)
 
   const TAB_LABELS: Record<string, string> = {
     dashboard: '🏠',
     inventario: '📦',
     movimientos: '📊',
     socios: '🤝',
+    imports: '🚢',
     chat: '💬',
   }
   const TAB_NAMES: Record<string, string> = {
@@ -641,6 +642,7 @@ export default function PartnerBusinessPage() {
     inventario: 'Stock',
     movimientos: business.type === 'cambio' ? 'Ops' : 'Movs',
     socios: 'Socios',
+    imports: 'Imports',
     chat: 'Chat',
   }
 
@@ -675,6 +677,8 @@ export default function PartnerBusinessPage() {
               onClick={() => {
                 if (t === 'chat') {
                   router.push(`/partners/${partnerId}/${businessId}/chat`)
+                } else if (t === 'imports') {
+                  router.push(`/partners/${partnerId}/${businessId}/imports`)
                 } else {
                   setTab(t as typeof tab)
                 }
