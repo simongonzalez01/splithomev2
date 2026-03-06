@@ -101,6 +101,23 @@ as $$
   );
 $$;
 
+-- ── Políticas (drop primero para evitar errores si ya existen) ───────
+drop policy if exists "imp_orders_select"   on import_orders;
+drop policy if exists "imp_orders_insert"   on import_orders;
+drop policy if exists "imp_orders_update"   on import_orders;
+drop policy if exists "imp_orders_delete"   on import_orders;
+
+drop policy if exists "imp_payments_select" on import_payments;
+drop policy if exists "imp_payments_insert" on import_payments;
+drop policy if exists "imp_payments_delete" on import_payments;
+
+drop policy if exists "imp_items_all"       on import_order_items;
+
+drop policy if exists "imp_events_select"   on import_events;
+drop policy if exists "imp_events_insert"   on import_events;
+
+drop policy if exists "imp_verification_all" on import_verification;
+
 -- Políticas: import_orders
 create policy "imp_orders_select" on import_orders
   for select using (is_import_biz_member(business_id));
