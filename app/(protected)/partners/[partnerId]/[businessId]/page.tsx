@@ -9,6 +9,7 @@ import {
   Check, Users, ShieldCheck, Clock, CreditCard, ChevronDown,
   Store, ArrowLeftRight, Wallet, ChevronRight,
 } from 'lucide-react'
+import ImportInventoryModal from '@/components/ImportInventoryModal'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 type Business = {
@@ -91,7 +92,8 @@ export default function PartnerBusinessPage() {
   const [filterType,  setFilterType]  = useState('')
 
   // ── Product form
-  const [showProdForm, setShowProdForm] = useState(false)
+  const [showImportModal, setShowImportModal] = useState(false)
+  const [showProdForm,    setShowProdForm]    = useState(false)
   const [pEditId,  setPEditId]  = useState<string | null>(null)
   const [pName,    setPName]    = useState('')
   const [pUnit,    setPUnit]    = useState('unidad')
@@ -893,11 +895,29 @@ export default function PartnerBusinessPage() {
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
               {products.length} producto{products.length !== 1 ? 's' : ''}
             </p>
-            <button onClick={openAddProduct}
-              className="flex items-center gap-1 text-xs font-bold text-orange-500">
-              <Plus size={14} strokeWidth={2.5} /> Agregar
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowImportModal(true)}
+                className="flex items-center gap-1 text-xs font-semibold text-gray-400 active:text-orange-500"
+              >
+                📥 Excel
+              </button>
+              <button onClick={openAddProduct}
+                className="flex items-center gap-1 text-xs font-bold text-orange-500">
+                <Plus size={14} strokeWidth={2.5} /> Agregar
+              </button>
+            </div>
           </div>
+
+          {/* Import modal */}
+          {showImportModal && (
+            <ImportInventoryModal
+              businessId={businessId}
+              color={business.color}
+              onClose={() => setShowImportModal(false)}
+              onSuccess={() => { setShowImportModal(false); load() }}
+            />
+          )}
           {products.length === 0 ? (
             <div className="text-center py-12">
               <Package size={32} className="text-gray-200 mx-auto mb-3" />
