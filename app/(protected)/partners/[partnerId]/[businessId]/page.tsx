@@ -343,8 +343,12 @@ export default function PartnerBusinessPage() {
     setTxEditId(null); setTxOrigItems([]); setTxExistRec(null)
     setTxType(type); setTxDesc(''); setTxDate(today()); setTxNotes('')
     setTxPayType('contado'); setTxAmtPaid(''); setTxClient('')
+    const firstProd = products[0]
+    const autoPrice = firstProd
+      ? (type === 'venta' ? Number(firstProd.sale_price) : Number(firstProd.cost_price))
+      : 0
     setTxItems(type === 'venta' || type === 'compra'
-      ? [{ product_id: products[0]?.id ?? '', qty: '1', unit_price: '' }] : [])
+      ? [{ product_id: firstProd?.id ?? '', qty: '1', unit_price: autoPrice > 0 ? String(autoPrice) : '' }] : [])
     setTxAmount(''); setTxFile(null); setTxPreview(null)
     setTxError(''); setShowTxForm(true)
   }
@@ -400,6 +404,7 @@ export default function PartnerBusinessPage() {
 
     const txPayload = {
       business_id:  businessId,
+      user_id:      userId,            // ← required by RLS policy (user_id = auth.uid())
       type:         txType,
       total,
       description:  txDesc.trim() || null,
@@ -1405,31 +1410,68 @@ export default function PartnerBusinessPage() {
               {(txType === 'venta' || txType === 'compra') && (
                 <div>
                   <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">Productos</label>
-                  <div className="space-y-2">
-                    {txItems.map((item, idx) => (
-                      <div key={idx} className="flex gap-2 items-center">
-                        <select value={item.product_id}
-                          onChange={e => setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, product_id: e.target.value } : it))}
-                          className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
-                          {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>
-                        <input type="number" placeholder="Cant" min="0.01" step="any" value={item.qty}
-                          onChange={e => setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, qty: e.target.value } : it))}
-                          className="w-16 bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400" />
-                        <input type="number" placeholder="Precio" min="0" step="any" value={item.unit_price}
-                          onChange={e => setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, unit_price: e.target.value } : it))}
-                          className="w-24 bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400" />
-                        {txItems.length > 1 && (
-                          <button type="button" onClick={() => setTxItems(prev => prev.filter((_, i) => i !== idx))}
-                            className="text-gray-300 p-1"><X size={14} /></button>
-                        )}
-                      </div>
-                    ))}
-                    <button type="button" onClick={() => setTxItems(prev => [...prev, { product_id: products[0]?.id ?? '', qty: '1', unit_price: '' }])}
-                      className="text-xs text-orange-500 font-semibold flex items-center gap-1">
-                      <Plus size={13} /> Agregar producto
-                    </button>
-                  </div>
+                  {products.length === 0 ? (
+                    <div className="bg-orange-50 border border-orange-200 rounded-xl px-4 py-3 text-xs text-orange-700 font-semibold text-center">
+                      No hay productos en el inventario.<br />
+                      <span className="font-normal text-orange-500">Agrega productos en la pestaña Inventario primero.</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {txItems.map((item, idx) => {
+                        const prod = products.find(p => p.id === item.product_id)
+                        return (
+                          <div key={idx}>
+                            <div className="flex gap-2 items-center">
+                              <select value={item.product_id}
+                                onChange={e => {
+                                  const p = products.find(pr => pr.id === e.target.value)
+                                  const autoPrice = txType === 'venta' ? Number(p?.sale_price ?? 0) : Number(p?.cost_price ?? 0)
+                                  setTxItems(prev => prev.map((it, i) => i === idx ? {
+                                    ...it, product_id: e.target.value,
+                                    unit_price: autoPrice > 0 ? String(autoPrice) : '',
+                                  } : it))
+                                }}
+                                className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
+                                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                              </select>
+                              <input type="number" placeholder="Cant" min="0.01" step="any" value={item.qty}
+                                onChange={e => setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, qty: e.target.value } : it))}
+                                className="w-16 bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                              <input type="number" placeholder="Precio" min="0" step="any" value={item.unit_price}
+                                onChange={e => setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, unit_price: e.target.value } : it))}
+                                className="w-24 bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                              {txItems.length > 1 && (
+                                <button type="button" onClick={() => setTxItems(prev => prev.filter((_, i) => i !== idx))}
+                                  className="text-gray-300 p-1"><X size={14} /></button>
+                              )}
+                            </div>
+                            {/* Price hints row */}
+                            {prod && (
+                              <div className="flex gap-3 text-[10px] mt-1 px-1">
+                                <span className={prod.cost_price === 0 ? 'text-orange-400' : 'text-gray-400'}>
+                                  Costo: {prod.cost_price === 0 ? '—' : fmt(prod.cost_price)}
+                                </span>
+                                <span className={prod.sale_price === 0 ? 'text-orange-400' : 'text-gray-400'}>
+                                  Precio: {prod.sale_price === 0 ? '—' : fmt(prod.sale_price)}
+                                </span>
+                                <span className={`${Number(prod.stock) <= Number(prod.min_stock) && prod.min_stock > 0 ? 'text-red-400 font-semibold' : 'text-gray-400'}`}>
+                                  Stock: {prod.stock} {prod.unit}{Number(prod.stock) <= Number(prod.min_stock) && prod.min_stock > 0 ? ' ⚠' : ''}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                      <button type="button" onClick={() => {
+                        const p = products[0]
+                        const autoPrice = txType === 'venta' ? Number(p?.sale_price ?? 0) : Number(p?.cost_price ?? 0)
+                        setTxItems(prev => [...prev, { product_id: p?.id ?? '', qty: '1', unit_price: autoPrice > 0 ? String(autoPrice) : '' }])
+                      }}
+                        className="text-xs text-orange-500 font-semibold flex items-center gap-1">
+                        <Plus size={13} /> Agregar producto
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
