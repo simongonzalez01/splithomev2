@@ -196,6 +196,20 @@ export default function ImportInventoryModal({
     })
   }
 
+  function toggleIncludeAll() {
+    const currentInvalidNums = invalidRows.map(r => r.rowNum)
+    const allSelected = currentInvalidNums.every(n => includedErrors.has(n))
+    setIncludedErrors(prev => {
+      const next = new Set(prev)
+      if (allSelected) {
+        currentInvalidNums.forEach(n => next.delete(n))
+      } else {
+        currentInvalidNums.forEach(n => next.add(n))
+      }
+      return next
+    })
+  }
+
   // ── File handling ──────────────────────────────────────────────────────────
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -224,6 +238,14 @@ export default function ImportInventoryModal({
     if (totalToImport === 0) return
     setImporting(true)
 
+    // Get current user — required by RLS policy (user_id = auth.uid())
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      setParseError('Sesión expirada. Recarga la página e intenta de nuevo.')
+      setImporting(false)
+      return
+    }
+
     // includedInvalid rows: use 0 for missing prices — they'll show ⚠️ in inventory
     const allToImport = [
       ...validRows,
@@ -238,6 +260,7 @@ export default function ImportInventoryModal({
 
     const payload = allToImport.map(r => ({
       business_id: businessId,
+      user_id:     user.id,          // ← required by RLS
       name:        r.name,
       unit:        r.unit,
       cost_price:  r.cost_price!,
@@ -346,6 +369,31 @@ export default function ImportInventoryModal({
           Cambiar
         </button>
       </div>
+
+      {/* Select-all for error rows */}
+      {invalidRows.length > 0 && (() => {
+        const allSelected = invalidRows.every(r => includedErrors.has(r.rowNum))
+        const someSelected = invalidRows.some(r => includedErrors.has(r.rowNum))
+        return (
+          <label className="flex items-center gap-2.5 bg-orange-50 border border-orange-200 rounded-xl px-3 py-2.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              ref={el => { if (el) el.indeterminate = !allSelected && someSelected }}
+              onChange={toggleIncludeAll}
+              className="w-4 h-4 rounded accent-orange-500 flex-shrink-0"
+            />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-bold text-orange-700">
+                Incluir todos los incompletos ({invalidRows.length})
+              </p>
+              <p className="text-[10px] text-orange-500 leading-tight">
+                Se importarán con precios en $0 y quedarán marcados ⚠️ en inventario
+              </p>
+            </div>
+          </label>
+        )
+      })()}
 
       {/* Rows list */}
       <div className="max-h-72 overflow-y-auto space-y-2 pr-0.5">
