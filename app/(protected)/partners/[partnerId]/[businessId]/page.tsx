@@ -926,13 +926,36 @@ export default function PartnerBusinessPage() {
           ) : (
             <div className="space-y-2">
               {products.map(p => (
-                <div key={p.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3.5">
+                <div
+                  key={p.id}
+                  className={`bg-white rounded-2xl shadow-sm px-4 py-3.5 border ${
+                    (p.cost_price === 0 || p.sale_price === 0)
+                      ? 'border-orange-200'
+                      : 'border-gray-100'
+                  }`}
+                >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <p className="font-bold text-gray-900 text-[14px]">{p.name}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-bold text-gray-900 text-[14px]">{p.name}</p>
+                        {(p.cost_price === 0 || p.sale_price === 0) && (
+                          <span className="flex items-center gap-1 text-[10px] font-bold text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                            <AlertTriangle size={9} />
+                            {p.cost_price === 0 && p.sale_price === 0
+                              ? 'Sin precios'
+                              : p.cost_price === 0
+                              ? 'Sin precio costo'
+                              : 'Sin precio venta'}
+                          </span>
+                        )}
+                      </div>
                       <div className="flex gap-3 mt-1 text-xs text-gray-500">
-                        <span>Costo: {fmt(p.cost_price)}</span>
-                        <span>Precio: {fmt(p.sale_price)}</span>
+                        <span className={p.cost_price === 0 ? 'text-orange-400 font-semibold' : ''}>
+                          Costo: {p.cost_price === 0 ? '—' : fmt(p.cost_price)}
+                        </span>
+                        <span className={p.sale_price === 0 ? 'text-orange-400 font-semibold' : ''}>
+                          Precio: {p.sale_price === 0 ? '—' : fmt(p.sale_price)}
+                        </span>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
