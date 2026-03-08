@@ -122,6 +122,8 @@ export default function PartnerBusinessPage() {
   const [txExistRec,  setTxExistRec]  = useState<string | null>(null)
   const [txSaving,    setTxSaving]    = useState(false)
   const [txError,     setTxError]     = useState('')
+  const [txItemSearches, setTxItemSearches] = useState<string[]>([])
+  const [txDropdownOpen, setTxDropdownOpen] = useState<number>(-1)
 
   // ── View receipt
   const [viewReceipt, setViewReceipt] = useState<string | null>(null)
@@ -349,6 +351,8 @@ export default function PartnerBusinessPage() {
       : 0
     setTxItems(type === 'venta' || type === 'compra'
       ? [{ product_id: firstProd?.id ?? '', qty: '1', unit_price: autoPrice > 0 ? String(autoPrice) : '' }] : [])
+    setTxItemSearches(type === 'venta' || type === 'compra' ? [firstProd?.name ?? ''] : [])
+    setTxDropdownOpen(-1)
     setTxAmount(''); setTxFile(null); setTxPreview(null)
     setTxError(''); setShowTxForm(true)
   }
@@ -365,9 +369,12 @@ export default function PartnerBusinessPage() {
       const orig = (items ?? []) as TxItem[]
       setTxOrigItems(orig)
       setTxItems(orig.map(i => ({ product_id: i.product_id, qty: String(i.quantity), unit_price: String(i.unit_price) })))
+      setTxItemSearches(orig.map(i => products.find(p => p.id === i.product_id)?.name ?? ''))
+      setTxDropdownOpen(-1)
       setTxAmount('')
     } else {
       setTxOrigItems([]); setTxItems([]); setTxAmount(String(t.total))
+      setTxItemSearches([]); setTxDropdownOpen(-1)
     }
     setShowTxForm(true)
   }
@@ -1419,35 +1426,91 @@ export default function PartnerBusinessPage() {
                     <div className="space-y-3">
                       {txItems.map((item, idx) => {
                         const prod = products.find(p => p.id === item.product_id)
+                        const search = txItemSearches[idx] ?? ''
+                        const filtered = products.filter(p =>
+                          p.name.toLowerCase().includes(search.toLowerCase())
+                        )
+                        const isOpen = txDropdownOpen === idx
                         return (
-                          <div key={idx}>
-                            <div className="flex gap-2 items-center">
-                              <select value={item.product_id}
+                          <div key={idx} className="bg-gray-50 border border-gray-100 rounded-2xl p-3 space-y-2.5">
+                            {/* Row 1: product search input */}
+                            <div className="relative">
+                              <input
+                                type="text"
+                                placeholder="Buscar producto..."
+                                value={search}
                                 onChange={e => {
-                                  const p = products.find(pr => pr.id === e.target.value)
-                                  const autoPrice = txType === 'venta' ? Number(p?.sale_price ?? 0) : Number(p?.cost_price ?? 0)
-                                  setTxItems(prev => prev.map((it, i) => i === idx ? {
-                                    ...it, product_id: e.target.value,
-                                    unit_price: autoPrice > 0 ? String(autoPrice) : '',
-                                  } : it))
+                                  const val = e.target.value
+                                  setTxItemSearches(prev => prev.map((s, i) => i === idx ? val : s))
+                                  setTxDropdownOpen(idx)
+                                  if (!val) setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, product_id: '' } : it))
                                 }}
-                                className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
-                                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                              </select>
-                              <input type="number" placeholder="Cant" min="0.01" step="any" value={item.qty}
-                                onChange={e => setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, qty: e.target.value } : it))}
-                                className="w-16 bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400" />
-                              <input type="number" placeholder="Precio" min="0" step="any" value={item.unit_price}
-                                onChange={e => setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, unit_price: e.target.value } : it))}
-                                className="w-24 bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                                onFocus={() => setTxDropdownOpen(idx)}
+                                onBlur={() => setTimeout(() => setTxDropdownOpen(-1), 150)}
+                                className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-sm pr-7 focus:outline-none focus:ring-2 focus:ring-orange-400"
+                              />
                               {txItems.length > 1 && (
-                                <button type="button" onClick={() => setTxItems(prev => prev.filter((_, i) => i !== idx))}
-                                  className="text-gray-300 p-1"><X size={14} /></button>
+                                <button type="button"
+                                  onMouseDown={e => e.preventDefault()}
+                                  onClick={() => {
+                                    setTxItems(prev => prev.filter((_, i) => i !== idx))
+                                    setTxItemSearches(prev => prev.filter((_, i) => i !== idx))
+                                    setTxDropdownOpen(-1)
+                                  }}
+                                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 p-0.5">
+                                  <X size={13} />
+                                </button>
+                              )}
+                              {/* Autocomplete dropdown */}
+                              {isOpen && filtered.length > 0 && (
+                                <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                                  {filtered.map(p => (
+                                    <button key={p.id} type="button"
+                                      onMouseDown={e => e.preventDefault()}
+                                      onClick={() => {
+                                        const autoPrice = txType === 'venta' ? Number(p.sale_price) : Number(p.cost_price)
+                                        setTxItems(prev => prev.map((it, i) => i === idx ? {
+                                          ...it, product_id: p.id,
+                                          unit_price: autoPrice > 0 ? String(autoPrice) : it.unit_price,
+                                        } : it))
+                                        setTxItemSearches(prev => prev.map((s, i) => i === idx ? p.name : s))
+                                        setTxDropdownOpen(-1)
+                                      }}
+                                      className="w-full text-left px-3 py-2.5 hover:bg-orange-50 border-b border-gray-50 last:border-0 transition-colors">
+                                      <div className="text-sm font-semibold text-gray-800">{p.name}</div>
+                                      <div className="flex gap-3 text-[10px] text-gray-400 mt-0.5">
+                                        <span>{txType === 'venta' ? 'Precio' : 'Costo'}: {txType === 'venta'
+                                          ? (p.sale_price > 0 ? fmt(p.sale_price) : '—')
+                                          : (p.cost_price > 0 ? fmt(p.cost_price) : '—')}</span>
+                                        <span className={`${Number(p.stock) <= Number(p.min_stock) && p.min_stock > 0 ? 'text-red-400 font-semibold' : ''}`}>
+                                          Stock: {p.stock} {p.unit}{Number(p.stock) <= Number(p.min_stock) && p.min_stock > 0 ? ' ⚠' : ''}
+                                        </span>
+                                      </div>
+                                    </button>
+                                  ))}
+                                </div>
                               )}
                             </div>
-                            {/* Price hints row */}
+                            {/* Row 2: Cantidad + Precio */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1 block">Cantidad</label>
+                                <input type="number" placeholder="1" min="0.01" step="any" value={item.qty}
+                                  onChange={e => setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, qty: e.target.value } : it))}
+                                  className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                              </div>
+                              <div>
+                                <label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1 block">
+                                  {txType === 'venta' ? 'Precio venta' : 'Precio costo'}
+                                </label>
+                                <input type="number" placeholder="0.00" min="0" step="any" value={item.unit_price}
+                                  onChange={e => setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, unit_price: e.target.value } : it))}
+                                  className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                              </div>
+                            </div>
+                            {/* Hints: show ref prices from catalog */}
                             {prod && (
-                              <div className="flex gap-3 text-[10px] mt-1 px-1">
+                              <div className="flex gap-3 text-[10px] px-0.5">
                                 <span className={prod.cost_price === 0 ? 'text-orange-400' : 'text-gray-400'}>
                                   Costo: {prod.cost_price === 0 ? '—' : fmt(prod.cost_price)}
                                 </span>
@@ -1463,9 +1526,9 @@ export default function PartnerBusinessPage() {
                         )
                       })}
                       <button type="button" onClick={() => {
-                        const p = products[0]
-                        const autoPrice = txType === 'venta' ? Number(p?.sale_price ?? 0) : Number(p?.cost_price ?? 0)
-                        setTxItems(prev => [...prev, { product_id: p?.id ?? '', qty: '1', unit_price: autoPrice > 0 ? String(autoPrice) : '' }])
+                        setTxItems(prev => [...prev, { product_id: '', qty: '1', unit_price: '' }])
+                        setTxItemSearches(prev => [...prev, ''])
+                        setTxDropdownOpen(txItems.length)
                       }}
                         className="text-xs text-orange-500 font-semibold flex items-center gap-1">
                         <Plus size={13} /> Agregar producto
