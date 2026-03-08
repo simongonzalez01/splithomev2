@@ -345,13 +345,9 @@ export default function PartnerBusinessPage() {
     setTxEditId(null); setTxOrigItems([]); setTxExistRec(null)
     setTxType(type); setTxDesc(''); setTxDate(today()); setTxNotes('')
     setTxPayType('contado'); setTxAmtPaid(''); setTxClient('')
-    const firstProd = products[0]
-    const autoPrice = firstProd
-      ? (type === 'venta' ? Number(firstProd.sale_price) : Number(firstProd.cost_price))
-      : 0
     setTxItems(type === 'venta' || type === 'compra'
-      ? [{ product_id: firstProd?.id ?? '', qty: '1', unit_price: autoPrice > 0 ? String(autoPrice) : '' }] : [])
-    setTxItemSearches(type === 'venta' || type === 'compra' ? [firstProd?.name ?? ''] : [])
+      ? [{ product_id: '', qty: '1', unit_price: '' }] : [])
+    setTxItemSearches(type === 'venta' || type === 'compra' ? [''] : [])
     setTxDropdownOpen(-1)
     setTxAmount(''); setTxFile(null); setTxPreview(null)
     setTxError(''); setShowTxForm(true)
