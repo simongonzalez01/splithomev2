@@ -2,13 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import webpush from 'web-push'
 import { createAdminClient } from '@/lib/supabase/admin'
 
-// Configure web-push once (VAPID keys from env)
-webpush.setVapidDetails(
-  `mailto:${process.env.VAPID_SUBJECT ?? 'admin@splithome.app'}`,
-  process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!,
-  process.env.VAPID_PRIVATE_KEY!,
-)
-
 // ── Types ────────────────────────────────────────────────────────
 type NotifPayload = {
   user_id: string
@@ -41,6 +34,13 @@ export async function GET(req: NextRequest) {
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // Configure web-push (must be inside handler so env vars are available at runtime)
+  webpush.setVapidDetails(
+    `mailto:${process.env.VAPID_SUBJECT ?? 'admin@splithome.app'}`,
+    process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!,
+    process.env.VAPID_PRIVATE_KEY!,
+  )
 
   const admin  = createAdminClient()
   const today  = todayStr()
