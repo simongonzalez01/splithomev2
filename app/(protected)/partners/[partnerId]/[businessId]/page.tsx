@@ -379,14 +379,16 @@ export default function PartnerBusinessPage() {
     e.preventDefault(); setTxError('')
     const hasItems = txType === 'venta' || txType === 'compra'
     const validItems = hasItems
-      ? txItems.filter(i => i.product_id && parseFloat(i.qty) > 0).map(i => {
+      ? txItems.flatMap((i, origIdx) => {
+          const customName = txItemSearches[origIdx]?.trim() ?? ''
+          if (!(i.product_id || customName) || !(parseFloat(i.qty) > 0)) return []
           const prod = products.find(p => p.id === i.product_id)
           const qty  = parseFloat(i.qty)
           const price = parseFloat(i.unit_price) || (txType === 'venta' ? Number(prod?.sale_price ?? 0) : Number(prod?.cost_price ?? 0))
-          return { product_id: i.product_id, quantity: qty, unit_price: price, subtotal: qty * price }
+          return [{ product_id: i.product_id || null, custom_name: i.product_id ? null : customName, quantity: qty, unit_price: price, subtotal: qty * price }]
         })
       : []
-    if (hasItems && validItems.length === 0) { setTxError('Agrega al menos un producto'); return }
+    if (hasItems && validItems.length === 0) { setTxError('Agrega al menos un producto con nombre y cantidad'); return }
     const total = hasItems ? validItems.reduce((s, i) => s + i.subtotal, 0) : parseFloat(txAmount)
     if (!hasItems && (!total || total <= 0)) { setTxError('Monto inválido'); return }
 
@@ -428,6 +430,7 @@ export default function PartnerBusinessPage() {
           deltas[orig.product_id] = (deltas[orig.product_id] ?? 0) + (txType === 'venta' ? +1 : -1) * orig.quantity
         }
         for (const item of validItems) {
+          if (!item.product_id) continue
           deltas[item.product_id] = (deltas[item.product_id] ?? 0) + (txType === 'venta' ? -1 : +1) * item.quantity
         }
         const { data: freshProds } = await supabase.from('business_products').select('id,stock').eq('business_id', businessId)
@@ -447,8 +450,9 @@ export default function PartnerBusinessPage() {
       if (error || !newTx) { setTxError(error?.message ?? 'Error'); setTxSaving(false); return }
       if (hasItems) {
         await supabase.from('business_tx_items').insert(validItems.map(i => ({ ...i, transaction_id: newTx.id })))
-        // Adjust stock
+        // Adjust stock (skip custom/free-text items with no product_id)
         for (const item of validItems) {
+          if (!item.product_id) continue
           const { data: prod } = await supabase.from('business_products').select('stock').eq('id', item.product_id).single()
           if (!prod) continue
           const newStock = txType === 'venta' ? Number(prod.stock) - item.quantity : Number(prod.stock) + item.quantity
@@ -1458,7 +1462,7 @@ export default function PartnerBusinessPage() {
                                 </button>
                               )}
                               {/* Autocomplete dropdown */}
-                              {isOpen && filtered.length > 0 && (
+                              {isOpen && search.trim() && (
                                 <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
                                   {filtered.map(p => (
                                     <button key={p.id} type="button"
@@ -1472,7 +1476,7 @@ export default function PartnerBusinessPage() {
                                         setTxItemSearches(prev => prev.map((s, i) => i === idx ? p.name : s))
                                         setTxDropdownOpen(-1)
                                       }}
-                                      className="w-full text-left px-3 py-2.5 hover:bg-orange-50 border-b border-gray-50 last:border-0 transition-colors">
+                                      className="w-full text-left px-3 py-2.5 hover:bg-orange-50 border-b border-gray-100 last:border-0 transition-colors">
                                       <div className="text-sm font-semibold text-gray-800">{p.name}</div>
                                       <div className="flex gap-3 text-[10px] text-gray-400 mt-0.5">
                                         <span>{txType === 'venta' ? 'Precio' : 'Costo'}: {txType === 'venta'
@@ -1484,6 +1488,19 @@ export default function PartnerBusinessPage() {
                                       </div>
                                     </button>
                                   ))}
+                                  {/* Free-text / custom item option */}
+                                  {!filtered.some(p => p.name.toLowerCase() === search.toLowerCase()) && (
+                                    <button type="button"
+                                      onMouseDown={e => e.preventDefault()}
+                                      onClick={() => {
+                                        setTxItems(prev => prev.map((it, i) => i === idx ? { ...it, product_id: '' } : it))
+                                        setTxDropdownOpen(-1)
+                                      }}
+                                      className="w-full text-left px-3 py-2.5 hover:bg-blue-50 border-t border-gray-100 transition-colors">
+                                      <div className="text-sm font-semibold text-blue-600">➕ Registrar &quot;{search}&quot; como artículo libre</div>
+                                      <div className="text-[10px] text-blue-400 mt-0.5">No descuenta del inventario</div>
+                                    </button>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -1504,8 +1521,8 @@ export default function PartnerBusinessPage() {
                                   className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400" />
                               </div>
                             </div>
-                            {/* Hints: show ref prices from catalog */}
-                            {prod && (
+                            {/* Hints: catalog prices when linked, badge when free-text */}
+                            {prod ? (
                               <div className="flex gap-3 text-[10px] px-0.5">
                                 <span className={prod.cost_price === 0 ? 'text-orange-400' : 'text-gray-400'}>
                                   Costo: {prod.cost_price === 0 ? '—' : fmt(prod.cost_price)}
@@ -1517,7 +1534,11 @@ export default function PartnerBusinessPage() {
                                   Stock: {prod.stock} {prod.unit}{Number(prod.stock) <= Number(prod.min_stock) && prod.min_stock > 0 ? ' ⚠' : ''}
                                 </span>
                               </div>
-                            )}
+                            ) : search.trim() && txDropdownOpen !== idx ? (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-bold text-blue-500 bg-blue-50 px-2 py-0.5 rounded-full">
+                                Artículo libre · no descuenta inventario
+                              </span>
+                            ) : null}
                           </div>
                         )
                       })}
