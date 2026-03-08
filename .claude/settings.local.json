@@ -5,7 +5,29 @@
       "Bash(npx tsc:*)",
       "Bash(npm run build:*)",
       "Bash(echo:*)",
-      "Bash(node scripts/generate-icons.mjs:*)"
+      "Bash(node scripts/generate-icons.mjs:*)",
+      "Bash(node_modules/.bin/tsc:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git remote set-url:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(git config:*)",
+      "Bash(security find-internet-password:*)",
+      "Bash(git ls-remote:*)",
+      "Bash(git remote:*)",
+      "Bash(wc:*)",
+      "Bash(head:*)",
+      "Bash(ls:*)",
+      "Bash(npx next build)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(find:*)",
+      "Bash(node -e \"const xlsx = require\\(''xlsx''\\); console.log\\(''xlsx ok:'', Object.keys\\(xlsx\\).length\\)\")",
+      "Bash(npm run lint)",
+      "Bash(ssh-keyscan github.com)",
+      "Bash(~/.ssh/known_hosts)",
+      "Bash(gh auth status)",
+      "Bash(grep -h \"^create table\\\\|^CREATE TABLE\" \"/Users/kamiabukair/Downloads/split home/scripts/\"*.sql \"/Users/kamiabukair/Downloads/split home/supabase_setup.sql\")"
     ]
   }
 }
